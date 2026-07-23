@@ -20,9 +20,9 @@ The design has three independently testable workstreams:
 - Preserve all Sipher modifications across upstream synchronization.
 - Add an `ai-gateway` provider with live model discovery and no duplicate
   credential entry.
-- Build Sipher-owned multi-architecture container images and desktop releases.
-- Deploy immutable relay releases to the Mac Studio with health checks,
-  backup, monitoring, and rollback.
+- Build Sipher-owned desktop releases and reproducible local relay images.
+- Deploy the reviewed `main` commit to the Mac Studio through SSH with health
+  checks, backup, monitoring, and rollback.
 - Avoid exposing AI Gateway credentials to the relay or persisting them in
   Buzz agent configuration.
 
@@ -50,7 +50,7 @@ Branches have the following roles:
 | Branch | Role | Deployment authority |
 |---|---|---|
 | `develop` | Default branch and integration target | Never deployed to production |
-| `main` | Production-ready Sipher history | Source for release tags only |
+| `main` | Production-ready Sipher history | Source for manual Mac Studio deployment |
 | `feature/*` | Product changes based on `develop` | None |
 | `fix/*` | Non-emergency fixes based on `develop` | None |
 | `sync/upstream-YYYYMMDD` | Repo-owner upstream merge based on `main` | None |
@@ -60,7 +60,7 @@ Branches have the following roles:
 The normal flow is:
 
 ```text
-feature/* ──PR──► develop ──release PR──► main ──tag──► immutable artifact
+feature/* ──PR──► develop ──release PR──► main ──SSH pull/build──► Mac Studio
                       ▲                    ▲
                       │                    │
                       └──── forward PR ────┤
@@ -69,7 +69,7 @@ upstream/main ──► sync/upstream-YYYYMMDD ──PR
 
 `main` and `develop` are protected against direct pushes, force pushes, and
 branch deletion. Required CI checks and at least one approving review apply to
-both. Release tags are immutable and may only be created by the release
+both. Desktop release tags are immutable and may only be created by the release
 workflow or an explicitly authorized release administrator.
 
 ### Owner-initiated upstream synchronization
@@ -91,7 +91,7 @@ Conflicts are resolved only on the sync branch. The branch receives the full
 CI suite and a repository-owner PR directly into `main`. The merge commit
 records the exact upstream parent, so no additional vendor branch is required.
 Merging the sync PR does not deploy production because the Mac Studio accepts
-only an explicit release tag and immutable image digest.
+changes only when an operator explicitly starts the SSH deployment.
 
 After the sync PR is merged, the repository owner opens a second PR from
 `main` into `develop`. The synchronization is not complete until that forward
@@ -114,36 +114,26 @@ immediately forward-merged from `main` into `develop` through a second PR. The
 hotfix is not considered complete until both PRs are merged, preventing the
 next normal release from dropping the correction.
 
-## Release Identity and Artifacts
+## Desktop Release Identity and Relay Deployment Source
 
-Sipher releases use names that cannot collide with upstream tags:
+Desktop releases use names that cannot collide with upstream tags. Relay
+deployments use the reviewed Git commit as their identity:
 
-| Artifact | Tag format | Published output |
+| Artifact | Identity | Output |
 |---|---|---|
-| Relay | `sipher-relay-v<semver>` | `ghcr.io/sipherxyz/buzz:<semver>` and digest |
+| Relay | `main@<40-character commit SHA>` | Locally built `sipher-buzz:<short-sha>` image |
 | Desktop | `sipher-desktop-v<semver>` | Signed Sipher desktop bundle and updater metadata |
 
-The repository variable `GHCR_IMAGE` is set to
-`ghcr.io/sipherxyz/buzz`. Container metadata, Helm defaults, Compose defaults,
-documentation, release conditions, and updater endpoints are changed from
-`block/buzz` to Sipher-owned locations where the value is not already
-configurable.
-
-Pull requests build and test images without publishing them. A merge to
-`develop` runs integration CI but does not move a production image tag. A
-release merge to `main` creates the Sipher release tag; the tag publishes an
-ARM64/AMD64 image and provenance. The Mac Studio deploys the image by immutable
-digest, not by `main`, `develop`, `latest`, or a mutable semver alias.
+Pull requests build and test the relay without publishing a production image.
+A merge to `develop` or `main` does not deploy automatically. The deployment
+operator connects to the Mac Studio, verifies that the production checkout is
+clean, fast-forwards it to `origin/main`, records the exact commit SHA, builds
+the relay image locally, and reconciles the Compose stack only after preflight
+and backup gates pass.
 
 The first implementation requires a GitHub identity with `Write` access to
 `sipherxyz/buzz`. The current `hoangtan282` identity has read-only access and
 cannot create branches, repository settings, packages, or pull requests.
-
-The Mac Studio authenticates to the private container registry with a
-non-human machine credential limited to package read access. The credential is
-stored outside the Compose environment, loaded by the deployment process, and
-rotated at least every 90 days. A failed registry login blocks deployment
-before the running stack is changed.
 
 ### Desktop identity and distribution
 
@@ -292,7 +282,7 @@ The relay never receives an AI Gateway credential or LLM request.
 The production stack uses the existing OrbStack Docker engine and
 `deploy/compose` definitions. A Sipher Compose override:
 
-- Uses the Sipher relay image digest.
+- Uses the locally built relay image tagged with the deployed commit SHA.
 - Binds the relay origin to loopback instead of exposing it on every LAN
   interface.
 - Avoids the Caddy override because port 443 is already occupied.
@@ -357,18 +347,23 @@ Production deployment is blocked until all of these conditions hold:
 
 A production deployment performs these steps:
 
-1. Verify the requested release tag and resolve its published image digest.
-2. Confirm disk, memory, OrbStack, backup, and tunnel preflight checks.
-3. Record the currently running digest and Compose configuration revision.
-4. Back up PostgreSQL and stable relay secrets.
-5. Pull the new image digest.
-6. Run database migrations using the release image.
-7. Reconcile the Compose stack.
-8. Wait for `/_liveness` and `/_readiness`.
-9. Run authenticated WebSocket, message, media, and agent-launch smoke tests.
-10. Mark the release successful and retain the previous digest.
+1. Connect to the Mac Studio through the configured SSH host.
+2. Confirm disk, memory, OrbStack, backup, Git, and tunnel preflight checks.
+3. Verify that the production checkout is on `main` and has no local changes.
+4. Fetch `origin/main` and fast-forward with `git pull --ff-only`.
+5. Record the previous and new 40-character commit SHAs.
+6. Back up PostgreSQL and stable relay secrets.
+7. Build `sipher-buzz:<short-sha>` from the checked-out source.
+8. Run database migrations using the newly built image.
+9. Reconcile the Compose stack with the new commit-tagged image.
+10. Wait for `/_liveness` and `/_readiness`.
+11. Run authenticated WebSocket, message, media, and agent-launch smoke tests.
+12. Mark the deployment successful and retain the previous local image.
 
-Rollback restores the previous image digest and Compose revision. Schema
+Rollback restores the previous commit-tagged local image and Compose revision
+without rewriting Git history. The checkout may remain at the newer `main`
+commit while the stack runs the previous image until a corrective commit is
+merged. Schema
 changes are classified before release:
 
 - `additive`: creates nullable columns, tables, indexes, or compatible data and
@@ -449,11 +444,11 @@ Git and release tests verify:
 - Protected-branch and tag rules.
 - Owner-initiated upstream merge against `main` and forward-merge into
   `develop`.
-- Sipher tag parsing and artifact naming.
-- ARM64 and AMD64 image publication.
-- Digest-pinned deployment and rollback.
+- Sipher desktop tag parsing and artifact naming.
+- Reproducible ARM64 relay build from a recorded `main` commit.
+- Commit-tagged deployment and rollback.
 - Hotfix forward-merge into `develop`.
-- Private registry authentication failure leaves the running deployment
+- Git fetch or local build failure leaves the running deployment
   unchanged.
 
 AI Gateway tests verify:
@@ -476,7 +471,7 @@ Mac Studio validation verifies:
 - Backup and full restore into an isolated Compose project.
 - Tunnel-only ingress.
 - Authenticated relay connection, messaging, media, git, and agent launch.
-- Rollback to the immediately previous image digest.
+- Rollback to the immediately previous commit-tagged image.
 
 ## Rollout
 
@@ -490,9 +485,10 @@ Mac Studio validation verifies:
 6. Remediate Mac Studio storage, memory, credentials, patching, firewall,
    FileVault, UPS, and service-account startup.
 7. Provision and validate the external production media bucket.
-8. Build the Sipher relay image and validate it in an ephemeral local stack.
+8. Pull `main`, build the Sipher relay locally, and validate it in an
+   ephemeral stack.
 9. Perform database backup, point-in-time recovery, and full restore rehearsal.
-10. Deploy the relay release by digest and run the 100-connection capacity test.
+10. Deploy the recorded `main` commit and run the 100-connection capacity test.
 11. Observe the 20-person pilot for two weeks against the service objectives.
 12. Expand internal access only if every acceptance criterion remains
     satisfied.
@@ -515,7 +511,8 @@ Mac Studio validation verifies:
 - A signed and notarized Sipher Desktop release candidate installs, opens its
   Sipher deep links, locates the packaged `buzz-agent`, reaches the production
   relay, and checks the Sipher updater endpoint.
-- The Mac Studio deploys a Sipher release by digest and passes all health and
+- The Mac Studio fast-forwards a clean production checkout to `origin/main`,
+  records the commit SHA, builds the relay locally, and passes all health and
   smoke checks.
 - The Mac Studio passes planned authenticated restart and physical FileVault
   recovery tests.
@@ -530,4 +527,5 @@ Mac Studio validation verifies:
   no more than four hours from the documented off-host backup.
 - The 100-connection test meets p95 message latency below 500 ms.
 - The 20-person pilot completes two weeks with at least 99.5% availability and
-  without critical disk, memory, tunnel, database, registry, or backup alerts.
+  without critical disk, memory, tunnel, database, source-build, or backup
+  alerts.
