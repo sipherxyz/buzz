@@ -26,4 +26,15 @@ assert_failure is_external_s3_endpoint "http://minio:9000"
 assert_failure is_external_s3_endpoint "http://localhost:9000"
 assert_failure is_external_s3_endpoint "http://127.0.0.1:9000"
 
+security_output="$(
+  report_host_security \
+    "FileVault is Off." \
+    "Firewall is disabled. (State = 0)" \
+    2>&1
+)"
+grep -q '^WARN  FileVault is disabled; disk-at-rest protection is an accepted operational risk$' \
+  <<<"$security_output"
+grep -q '^WARN  macOS application firewall is disabled; host services must be protected by the network perimeter$' \
+  <<<"$security_output"
+
 echo "preflight tests passed"
