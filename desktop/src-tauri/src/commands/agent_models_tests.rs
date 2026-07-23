@@ -8,30 +8,37 @@ fn openai_model_normalization_keeps_agent_text_models() {
                 OpenAiModelListItem {
                     id: "text-embedding-3-large".to_string(),
                     created: Some(4),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "gpt-image-2".to_string(),
                     created: Some(5),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "chatgpt-5.5-pro-2026-04-23".to_string(),
                     created: Some(7),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "chatgpt-5.5-pro".to_string(),
                     created: Some(6),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "gpt-5.4-mini".to_string(),
                     created: Some(2),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "o4-mini".to_string(),
                     created: Some(3),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "gpt-5.4-mini".to_string(),
                     created: Some(1),
+                    display_name: None,
                 },
             ],
         },
@@ -63,22 +70,27 @@ fn openai_compat_model_normalization_preserves_provider_specific_ids() {
                 OpenAiModelListItem {
                     id: "meta-llama/Llama-3.3-70B-Instruct".to_string(),
                     created: Some(5),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "mistral-large-latest".to_string(),
                     created: Some(4),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "anthropic/claude-sonnet-4-6".to_string(),
                     created: Some(3),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "text-embedding-compatible".to_string(),
                     created: Some(2),
+                    display_name: None,
                 },
                 OpenAiModelListItem {
                     id: "meta-llama/Llama-3.3-70B-Instruct".to_string(),
                     created: Some(1),
+                    display_name: None,
                 },
             ],
         },
@@ -94,6 +106,44 @@ fn openai_compat_model_normalization_preserves_provider_specific_ids() {
             "anthropic/claude-sonnet-4-6".to_string(),
             "text-embedding-compatible".to_string(),
         ]
+    );
+}
+
+#[test]
+fn ai_gateway_is_openai_compatible_and_uses_gateway_display_names() {
+    assert!(is_openai_compatible_provider(Some("ai-gateway")));
+
+    let response: OpenAiModelListResponse = serde_json::from_value(serde_json::json!({
+        "data": [{
+            "id": "anthropic/claude-sonnet-4-6",
+            "display_name": "Claude Sonnet 4.6",
+            "context_length": 200000,
+            "thinking": true
+        }]
+    }))
+    .expect("detailed AI Gateway response");
+    let models = normalize_openai_compatible_models(response, Some("ai-gateway"));
+
+    assert_eq!(models[0].name.as_deref(), Some("Claude Sonnet 4.6"));
+}
+
+#[test]
+fn ai_gateway_model_request_asks_for_full_details() {
+    let request = crate::managed_agents::ai_gateway_models_request(
+        &reqwest::Client::new(),
+        "http://localhost:8317/v1/models",
+        "secret",
+        Some("ai-gateway"),
+    )
+    .build()
+    .expect("request builds");
+
+    assert_eq!(
+        request
+            .headers()
+            .get("X-AI-Gateway-Models-Detail")
+            .and_then(|value| value.to_str().ok()),
+        Some("full")
     );
 }
 
