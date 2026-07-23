@@ -6,7 +6,10 @@ not part of the production stack.
 
 ## One-time setup
 
-1. Enable FileVault and the macOS application firewall.
+1. Review the FileVault and macOS application firewall warnings. They are
+   recommended hardening controls, but remain advisory on a shared host where
+   pre-boot unlock or inbound filtering could interrupt existing bots and VMs.
+   Record the accepted operational risk when either control remains disabled.
 2. Connect the Mac Studio and network equipment to a UPS.
 3. Reserve at least 500 GB of disk and 8 GB of reclaimable memory for Buzz.
 4. Install and start OrbStack or Docker Desktop.
@@ -35,6 +38,11 @@ The script requires a clean `main`, fetches and fast-forwards from
 `origin/main`, builds `sipher-buzz:<12-char-commit>`, takes a PostgreSQL backup
 when a database already exists, starts the stack, and records the healthy
 commit under the ignored `deploy/macstudio/state/` directory.
+
+Preflight continues past FileVault and macOS firewall findings with `WARN`
+output. A dirty/non-main checkout, insufficient resources, invalid production
+configuration or external S3, and an unavailable Docker engine remain hard
+failures.
 
 ## Roll back
 
