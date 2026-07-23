@@ -33,6 +33,8 @@ The design has three independently testable workstreams:
 - Deploying Kubernetes or a permanent staging environment on the Mac Studio.
 - Replacing AI Gateway provider routing inside Buzz.
 - Making the Mac Studio highly available.
+- Guaranteeing unattended recovery from an uncontrolled reboot while FileVault
+  is locked at the macOS preboot screen.
 
 ## Repository and Branch Model
 
@@ -96,6 +98,17 @@ After an upstream sync has passed integration testing in `develop`, it reaches
 `main` through the next release PR. This preserves Sipher commits and makes
 upstream regressions independently reversible.
 
+The Sipher platform owner checks upstream weekly and opens a sync PR at least
+once per month. A security fix rated high or critical is evaluated within one
+business day and integrated within three business days when applicable.
+Every sync PR records the old and new upstream commit SHAs, upstream release
+notes reviewed, conflicts resolved, and Sipher-specific regression suites run.
+
+An accepted `hotfix/*` PR targets `main`, produces a patch release, and is then
+immediately forward-merged from `main` into `develop` through a second PR. The
+hotfix is not considered complete until both PRs are merged, preventing the
+next normal release from dropping the correction.
+
 ## Release Identity and Artifacts
 
 Sipher releases use names that cannot collide with upstream tags:
@@ -120,6 +133,40 @@ digest, not by `main`, `develop`, `latest`, or a mutable semver alias.
 The first implementation requires a GitHub identity with `Write` access to
 `sipherxyz/buzz`. The current `hoangtan282` identity has read-only access and
 cannot create branches, repository settings, packages, or pull requests.
+
+The Mac Studio authenticates to the private container registry with a
+non-human machine credential limited to package read access. The credential is
+stored outside the Compose environment, loaded by the deployment process, and
+rotated at least every 90 days. A failed registry login blocks deployment
+before the running stack is changed.
+
+### Desktop identity and distribution
+
+The Sipher desktop fork uses:
+
+```text
+Product name: Sipher Buzz
+Bundle identifier: xyz.sipher.buzz
+Deep-link scheme: sipher-buzz
+Keychain service: sipher-buzz-desktop
+Updater endpoint:
+https://github.com/sipherxyz/buzz/releases/download/sipher-desktop-latest/latest.json
+```
+
+Desktop release candidates use `sipher-desktop-v<semver>-rc.<n>` and are
+distributed only to the pilot ring. Stable releases use
+`sipher-desktop-v<semver>` and advance the Sipher updater manifest only after
+pilot approval. macOS artifacts are signed and notarized with Sipher-owned
+credentials held in GitHub Actions secrets or an equivalent protected signing
+service.
+
+The initial employee distribution is a signed DMG delivered through the
+company software portal or MDM. The packaged app includes the managed
+`buzz-agent`, the production relay URL, and the `ai-gateway` provider. Desktop
+updates roll out in three rings: engineering pilot, wider internal pilot, then
+all employees. A failed release is stopped by freezing the updater manifest;
+because Tauri updaters do not provide a reliable downgrade path, recovery uses
+a fixed forward release or an explicitly distributed previous signed DMG.
 
 ## AI Gateway Integration
 
@@ -158,6 +205,15 @@ Buzz does not copy the Gateway key into persona settings, its database, logs,
 or relay events. The Tauri process injects the key into the managed
 `buzz-agent` child process only for that process lifetime.
 
+The initial compatibility baseline is AI Gateway commit
+`a52bf5c80f7cbb61494ffcec1aac3a40cc536021` or a later build preserving its
+profile, secure-store, `/v1/models`, and Chat Completions contracts. Unknown
+status output, an unsupported profile format, or a newer incompatible
+secure-store layout fails closed with an actionable compatibility message.
+Parsing tests use captured outputs from every supported Gateway release. Buzz
+prefers the Gateway's stable profile and secure-store contracts and uses
+human-readable CLI output only where no structured contract exists.
+
 ### Model discovery
 
 When `ai-gateway` is selected, the Tauri backend requests:
@@ -179,11 +235,18 @@ longer advertised, Buzz preserves the saved value, displays a blocking
 warning, and requires the user to select an available model before starting a
 new turn.
 
+Model discovery must complete within five seconds on a healthy local Gateway.
+The in-memory result is cached for two minutes. A manual refresh bypasses the
+cache, and a failed refresh may display the last-known-good catalog with a
+stale warning but cannot silently validate a model that the current Gateway no
+longer advertises.
+
 ### User-visible states
 
 The provider UI distinguishes:
 
 - Gateway executable missing.
+- Gateway version unsupported.
 - Profile not authenticated.
 - Gateway unreachable.
 - Model catalog loading.
@@ -230,17 +293,26 @@ The production stack uses the existing OrbStack Docker engine and
 - Avoids the Caddy override because port 443 is already occupied.
 - Uses stable named volumes for PostgreSQL and Redis.
 - Keeps health, readiness, and restart policies.
-- Points media storage to an external S3-compatible bucket where available.
+- Points media storage to the production S3-compatible bucket.
 
-An external S3-compatible bucket is the recommended media source of truth
-because the internal SSD is already 95% utilized. If external object storage
-is not approved, a dedicated external SSD with monitored capacity is required
-before production deployment.
+An external S3-compatible bucket is mandatory as the media source of truth
+because the internal SSD is already 95% utilized. The bucket has encryption,
+versioning, public access blocking, lifecycle rules, and a credential scoped to
+the single media bucket. MinIO is disabled in production. Local disks retain
+only PostgreSQL, Redis, container layers, logs, and bounded git scratch/cache.
 
-OrbStack and the Compose project start through a user LaunchAgent after the
-Docker engine becomes ready. Production secrets live in a root- or
-service-account-readable environment file with mode `0600`; no secret is
-stored in the repository.
+OrbStack and the Compose project run in a dedicated non-admin macOS service
+account. A user LaunchAgent starts OrbStack and then starts the Compose project
+after the Docker engine becomes ready. The account does not auto-login.
+Planned restarts use authenticated restart so FileVault can return to the
+service session without leaving the disk unencrypted. An uncontrolled power
+loss requires an authorized operator to unlock FileVault and log in; this is
+covered by the four-hour disaster RTO.
+
+Production secrets live in a service-account-readable environment file with
+mode `0600`; no secret is stored in the repository. The Mac Studio has a UPS
+capable of orderly shutdown, and the on-call runbook identifies who can
+perform a physical FileVault unlock.
 
 ### Network ingress
 
@@ -270,11 +342,11 @@ Production deployment is blocked until all of these conditions hold:
   restricted by host firewall or network ACL.
 - The Buzz service account has only the filesystem and runtime permissions it
   needs.
-- A UPS or an accepted power-loss risk is documented.
-
-FileVault requires a separate operational decision because full-disk
-encryption can prevent unattended recovery after reboot. Until that decision
-is made, secrets and off-host backups must be encrypted independently.
+- FileVault is enabled, a planned authenticated restart is tested, and the
+  physical recovery procedure meets the disaster RTO.
+- The UPS and orderly-shutdown path are tested.
+- An external S3-compatible bucket passes read, write, delete, list,
+  encryption, versioning, and restore checks.
 
 ## Deployment and Rollback
 
@@ -292,9 +364,20 @@ A production deployment performs these steps:
 10. Mark the release successful and retain the previous digest.
 
 Rollback restores the previous image digest and Compose revision. Schema
-changes must be backward-compatible for at least one release so image rollback
-does not require an immediate database restore. A database restore is reserved
-for destructive migration failures and follows the tested backup runbook.
+changes are classified before release:
+
+- `additive`: creates nullable columns, tables, indexes, or compatible data and
+  permits normal image rollback.
+- `expand-contract`: ships the expand phase first, keeps old and new
+  application versions compatible for one release, and delays the contract
+  phase until rollback is no longer required.
+- `destructive`: removes or irreversibly rewrites data and requires an approved
+  maintenance window, verified backup, isolated restore test, and explicit
+  database rollback procedure.
+
+Automated deployment accepts only `additive` or the expand phase of
+`expand-contract` migrations. A destructive migration requires manual release
+approval and cannot claim the normal fifteen-minute image rollback objective.
 
 ## Backup and Restore
 
@@ -306,8 +389,10 @@ The backup set contains:
 - Git persistent data if the deployed version still treats it as durable.
 - Object-storage versioning or a separate object backup policy.
 
-PostgreSQL backups run daily and are encrypted off-host. Retention is seven
-daily, four weekly, and twelve monthly restore points. Backup success is
+PostgreSQL uses continuous WAL archiving to encrypted off-host storage plus a
+daily base backup. The production objectives are an RPO of at most one hour and
+a disaster RTO of at most four hours. Retention is seven daily, four weekly,
+and twelve monthly restore points. Backup success and WAL freshness are
 monitored, and a restore drill is performed before the initial rollout and
 quarterly afterward.
 
@@ -334,6 +419,24 @@ Required alerts cover:
 Logs are structured, size-limited, and rotated. Secret values and authorization
 headers are redacted.
 
+The initial service objectives are:
+
+| Measure | Pilot objective |
+|---|---|
+| Pilot size | 20 employees |
+| Validated capacity | 100 concurrent WebSocket clients |
+| Message delivery latency | p95 below 500 ms on the company network |
+| Monthly availability | 99.5%, excluding announced maintenance |
+| Normal application rollback | 15 minutes |
+| Data RPO | 1 hour |
+| Disaster RTO | 4 hours |
+| Model catalog response | 5 seconds on a healthy local Gateway |
+
+Capacity testing runs at 100 concurrent clients, five times the 20-person pilot
+size, before expanding beyond the pilot ring. The single-node availability
+objective explicitly accepts that the Mac Studio, office power, office network,
+and tunnel are common failure domains.
+
 ## Testing Strategy
 
 Git and release tests verify:
@@ -343,6 +446,9 @@ Git and release tests verify:
 - Sipher tag parsing and artifact naming.
 - ARM64 and AMD64 image publication.
 - Digest-pinned deployment and rollback.
+- Hotfix forward-merge into `develop`.
+- Private registry authentication failure leaves the running deployment
+  unchanged.
 
 AI Gateway tests verify:
 
@@ -354,10 +460,13 @@ AI Gateway tests verify:
 - Authorization and model-detail request headers.
 - Loading, offline, refresh, removed-model, and authentication UI states.
 - A complete agent turn through a mock OpenAI-compatible Gateway endpoint.
+- The packaged signed Desktop includes `buzz-agent`, the production relay URL,
+  and the Sipher updater identity.
 
 Mac Studio validation verifies:
 
-- Clean boot and automatic stack recovery.
+- Automatic stack recovery after a planned authenticated restart.
+- Physical FileVault recovery after an uncontrolled reboot.
 - Backup and full restore into an isolated Compose project.
 - Tunnel-only ingress.
 - Authenticated relay connection, messaging, media, git, and agent launch.
@@ -365,30 +474,53 @@ Mac Studio validation verifies:
 
 ## Rollout
 
-1. Establish GitHub permissions, `develop`, protection rules, and Sipher
-   artifact ownership.
-2. Implement and release AI Gateway support through `develop`.
-3. Remediate Mac Studio storage, memory, credentials, patching, and firewall.
-4. Build the Sipher relay image and validate it in an ephemeral local stack.
-5. Perform backup and restore rehearsal.
-6. Deploy a limited employee pilot.
-7. Observe resource, reliability, and user metrics for two weeks.
-8. Expand internal access only if the acceptance criteria remain satisfied.
+1. Grant the implementation identity GitHub `Write` access and verify branch,
+   package, Actions, and pull-request permissions.
+2. Create and protect `develop`, protect `main`, configure Sipher artifact
+   ownership, and rehearse one upstream sync.
+3. Build and sign the Sipher Desktop release pipeline.
+4. Implement AI Gateway support through feature PRs into `develop`.
+5. Distribute a signed release candidate to the 20-person engineering ring.
+6. Remediate Mac Studio storage, memory, credentials, patching, firewall,
+   FileVault, UPS, and service-account startup.
+7. Provision and validate the external production media bucket.
+8. Build the Sipher relay image and validate it in an ephemeral local stack.
+9. Perform database backup, point-in-time recovery, and full restore rehearsal.
+10. Deploy the relay release by digest and run the 100-connection capacity test.
+11. Observe the 20-person pilot for two weeks against the service objectives.
+12. Expand internal access only if every acceptance criterion remains
+    satisfied.
 
 ## Acceptance Criteria
 
 - `develop` is the default protected branch and `main` is the protected
   production branch.
+- The implementation identity can push branches, create PRs, publish packages,
+  and read the private production image from the Mac Studio.
 - A rehearsal merge from `upstream/main` preserves all Sipher changes and
   passes CI.
+- A hotfix merged to `main` is forward-merged into `develop` before closure.
 - An employee already authenticated with AI Gateway can select it, refresh its
   advertised models, select a model, and complete an agent turn without
   entering another API key.
 - No AI Gateway credential is present in Buzz persisted configuration, relay
   traffic, or logs.
+- A signed and notarized Sipher Desktop release candidate installs, opens its
+  Sipher deep links, locates the packaged `buzz-agent`, reaches the production
+  relay, and checks the Sipher updater endpoint.
 - The Mac Studio deploys a Sipher release by digest and passes all health and
   smoke checks.
+- The Mac Studio passes planned authenticated restart and physical FileVault
+  recovery tests.
+- Host storage and memory meet the 500 GB and 8 GB headroom gates throughout
+  the pilot.
+- The external media bucket passes encryption, versioning, authorization, and
+  restore tests; MinIO is absent from production.
 - The previous release can be restored without a database restore.
-- A fresh environment can be recovered from the documented off-host backup.
-- The pilot completes two weeks without critical disk, memory, tunnel,
-  database, or backup alerts.
+- Additive and expand-contract migration tests prove compatibility with the
+  immediately previous relay image.
+- A fresh environment can be recovered to a point no older than one hour in
+  no more than four hours from the documented off-host backup.
+- The 100-connection test meets p95 message latency below 500 ms.
+- The 20-person pilot completes two weeks with at least 99.5% availability and
+  without critical disk, memory, tunnel, database, registry, or backup alerts.
