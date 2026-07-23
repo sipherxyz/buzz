@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REQUIRED_ENV_KEYS = [
   "BUZZ_UPDATER_PUBLIC_KEY",
@@ -9,6 +10,9 @@ const REQUIRED_ENV_KEYS = [
 ];
 
 const DEFAULT_WINDOWS_TIMESTAMP_URL = "http://timestamp.digicert.com";
+const DEFAULT_OUTPUT_PATH = fileURLToPath(
+  new URL("../src-tauri/tauri.sipher.release.conf.json", import.meta.url),
+);
 
 function readNonEmpty(env, key) {
   const value = env[key];
@@ -29,21 +33,36 @@ function assertRequiredEnv(env) {
   }
 }
 
-function assertProductionRelayUrls(relayWsUrl, relayHttpUrl) {
-  if (
-    !relayWsUrl.startsWith("wss://") ||
-    !relayHttpUrl.startsWith("https://")
-  ) {
-    throw new Error(
-      "BUZZ_RELAY_URL must use wss:// and BUZZ_RELAY_HTTP must use https://",
-    );
+function assertProductionUrl(value, key, protocol, protocolError) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${key} must be a valid ${protocol}// URL with a hostname`);
+  }
+
+  if (parsed.hostname.length === 0) {
+    throw new Error(`${key} must be a valid ${protocol}// URL with a hostname`);
+  }
+  if (parsed.protocol !== protocol) {
+    throw new Error(protocolError);
   }
 }
 
+function assertProductionRelayUrls(relayWsUrl, relayHttpUrl) {
+  const protocolError =
+    "BUZZ_RELAY_URL must use wss:// and BUZZ_RELAY_HTTP must use https://";
+  assertProductionUrl(relayWsUrl, "BUZZ_RELAY_URL", "wss:", protocolError);
+  assertProductionUrl(relayHttpUrl, "BUZZ_RELAY_HTTP", "https:", protocolError);
+}
+
 function assertProductionUpdaterEndpoint(updaterEndpoint) {
-  if (!updaterEndpoint.startsWith("https://")) {
-    throw new Error("BUZZ_UPDATER_ENDPOINT must use https://");
-  }
+  assertProductionUrl(
+    updaterEndpoint,
+    "BUZZ_UPDATER_ENDPOINT",
+    "https:",
+    "BUZZ_UPDATER_ENDPOINT must use https://",
+  );
 }
 
 export function buildSipherReleaseConfig(env) {
@@ -89,9 +108,11 @@ export function buildSipherReleaseConfig(env) {
   return releaseConfig;
 }
 
-export function writeSipherReleaseConfig({ cwd = process.cwd(), config }) {
-  const outputPath = resolve(cwd, "src-tauri/tauri.sipher.release.conf.json");
-  mkdirSync(resolve(cwd, "src-tauri"), { recursive: true });
+export function writeSipherReleaseConfig({
+  outputPath = DEFAULT_OUTPUT_PATH,
+  config,
+}) {
+  mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(config, null, 2)}\n`);
   return outputPath;
 }
@@ -103,7 +124,10 @@ function main() {
   console.log(`Wrote ${outputPath}`);
 }
 
-if (import.meta.url === new URL(process.argv[1], "file:").href) {
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
   try {
     main();
   } catch (error) {
