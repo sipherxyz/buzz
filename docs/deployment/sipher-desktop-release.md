@@ -10,7 +10,8 @@ The macOS artifacts are the release priority. Both Apple Silicon and Intel
 builds must sign, notarize, and pass verification before `latest.json` is
 published. The Windows job is optional and cannot block the macOS release.
 All Sipher release runs share one repository-wide concurrency group, so tag
-builds and manual retries execute serially.
+builds and manual retries execute serially. The workflow uses `queue: max` so
+up to 100 pending releases wait instead of replacing an already pending run.
 
 ## Required repository secrets
 
@@ -184,9 +185,11 @@ versioned-release-only.
 The rolling updater is also protected by a monotonic SemVer guard. Before
 touching `sipher-desktop-latest`, the final job reads the currently published
 `latest.json`. An older queued tag or manual rerun may rebuild its immutable
-versioned release, but it skips all rolling assets and manifest updates. Equal
-versions may be retried, and newer versions upload payloads before
-`latest.json`, so clients never observe a manifest pointing to missing assets.
+versioned release, but it skips all rolling assets and manifest updates. An
+equal version may retry an existing versioned draft, but it also skips every
+rolling asset and manifest mutation. Only a newer version uploads payloads
+before `latest.json`, so clients never observe a manifest pointing to missing
+assets.
 
 ## Verify and cut over
 

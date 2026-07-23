@@ -14,6 +14,7 @@ concurrency:
   # GitHub concurrency groups are repository-scoped. A single constant group
   # serializes every Sipher tag and manual retry before rolling release mutation.
   group: sipher-desktop-release
+  queue: max
   cancel-in-progress: false
 
 permissions: {}
@@ -728,9 +729,9 @@ jobs:
             }
             return 0;
           }
-          if (compareVersions(incoming, current) < 0) {
+          if (compareVersions(incoming, current) <= 0) {
             console.error(
-              `incoming version is older than rolling latest: ${incoming} < ${current}`,
+              `incoming version is not newer than rolling latest: ${incoming} <= ${current}`,
             );
             process.exit(10);
           }
@@ -742,7 +743,7 @@ jobs:
               echo "promote=true" >> "$GITHUB_OUTPUT"
               ;;
             10)
-              echo "::notice::Skipping rolling updater promotion for older version $VERSION"
+              echo "::notice::Skipping rolling updater promotion for non-newer version $VERSION"
               echo "promote=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
