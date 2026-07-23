@@ -328,7 +328,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai") | Some("openai-compat") | Some("ai-gateway") => Some("OPENAI_COMPAT_MODEL"),
         _ => None,
     };
     let model_present = effective

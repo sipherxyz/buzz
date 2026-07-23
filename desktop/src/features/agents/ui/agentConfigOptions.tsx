@@ -37,6 +37,7 @@ export const CUSTOM_PROVIDER_DROPDOWN_VALUE = "__custom_provider__";
 export const NO_RUNTIME_DROPDOWN_VALUE = "__no_runtime__";
 
 const KNOWN_LLM_PROVIDER_IDS = [
+  "ai-gateway",
   "anthropic",
   "databricks",
   "databricks_v2",
@@ -117,6 +118,7 @@ const DEFAULT_MODEL_OPTION: PersonaModelOption = {
 };
 
 export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
+  { id: "ai-gateway", label: "AI Gateway" },
   { id: "anthropic", label: "Anthropic" },
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
@@ -278,6 +280,7 @@ export function providerRequiresExplicitModel(
   const trimmedProvider = providerId?.trim() ?? "";
   return (
     trimmedProvider === "anthropic" ||
+    trimmedProvider === "ai-gateway" ||
     trimmedProvider === "openai" ||
     trimmedProvider === "openai-compat"
   );
@@ -367,9 +370,11 @@ export function getPersonaProviderOptions(
   const defaultProviderOptions = [
     { id: "", label: getDefaultLlmProviderLabel(runtimeId, globalProvider) },
   ];
-  const filteredOptions = hideProviderIds?.size
-    ? PERSONA_LLM_PROVIDER_OPTIONS.filter((o) => !hideProviderIds.has(o.id))
-    : PERSONA_LLM_PROVIDER_OPTIONS;
+  const filteredOptions = PERSONA_LLM_PROVIDER_OPTIONS.filter(
+    (option) =>
+      !(hideProviderIds?.has(option.id) ?? false) &&
+      (option.id !== "ai-gateway" || runtimeId === "buzz-agent"),
+  );
   const options = [...defaultProviderOptions, ...filteredOptions];
   if (
     trimmedProvider.length === 0 ||
