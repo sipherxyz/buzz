@@ -48,6 +48,17 @@ is_production_relay_url() {
   test "$1" = "wss://buzz.sipher.gg:8443"
 }
 
+is_boolean() {
+  case "$1" in
+    true|false)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 env_value() {
   local key="$1"
   local file="$2"
@@ -66,6 +77,24 @@ env_value() {
         exit
       }
     }
+  ' "$file"
+}
+
+env_has_key() {
+  local key="$1"
+  local file="$2"
+  awk -v wanted="$key" '
+    /^[[:space:]]*#/ { next }
+    {
+      split($0, parts, "=")
+      name = parts[1]
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name == wanted) {
+        found = 1
+        exit
+      }
+    }
+    END { exit(found ? 0 : 1) }
   ' "$file"
 }
 
@@ -162,6 +191,26 @@ check_env() {
   owner_pubkey="$(env_value RELAY_OWNER_PUBKEY "$ENV_FILE")"
   relay_url="$(env_value RELAY_URL "$ENV_FILE")"
 
+  is_boolean "$require_auth" || {
+    fail "BUZZ_REQUIRE_AUTH_TOKEN must be exactly true or false"
+    return 1
+  }
+  is_boolean "$require_membership" || {
+    fail "BUZZ_REQUIRE_RELAY_MEMBERSHIP must be exactly true or false"
+    return 1
+  }
+  is_production_relay_url "$relay_url" || {
+    fail "RELAY_URL must be wss://buzz.sipher.gg:8443"
+    return 1
+  }
+
+  if env_has_key BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE"; then
+    is_hex_key "$relay_private_key" || {
+      fail "BUZZ_RELAY_PRIVATE_KEY must be omitted or set to a stable 64-character hex key"
+      return 1
+    }
+  fi
+
   if test "$require_membership" = "true"; then
     test "$require_auth" = "true" || {
       fail "BUZZ_REQUIRE_AUTH_TOKEN=true is required before BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
@@ -170,7 +219,7 @@ check_env() {
   fi
 
   if test "$require_auth" = "true"; then
-    is_hex_key "$relay_private_key" || {
+    env_has_key BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE" || {
       fail "BUZZ_RELAY_PRIVATE_KEY must be a stable 64-character hex key when BUZZ_REQUIRE_AUTH_TOKEN=true"
       return 1
     }
@@ -179,10 +228,6 @@ check_env() {
   if test "$require_membership" = "true"; then
     is_hex_key "$owner_pubkey" || {
       fail "RELAY_OWNER_PUBKEY must be a 64-character hex human owner pubkey when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
-      return 1
-    }
-    is_production_relay_url "$relay_url" || {
-      fail "RELAY_URL must be wss://buzz.sipher.gg:8443 when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
       return 1
     }
   fi

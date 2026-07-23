@@ -49,7 +49,9 @@ failures.
 Keep `BUZZ_REQUIRE_AUTH_TOKEN=false` and
 `BUZZ_REQUIRE_RELAY_MEMBERSHIP=false` through the initial deployment. Turning
 on membership before the owner and employee identities are established can
-lock existing clients out.
+lock existing clients out. These controls are read from `.env` through the
+Compose service `env_file`; edit that reviewed file rather than using one-off
+shell overrides during a cutover.
 
 1. Generate and persist a stable 64-character hex `BUZZ_RELAY_PRIVATE_KEY`,
    then uncomment its setting in `.env`. Rotating it later changes the relay
