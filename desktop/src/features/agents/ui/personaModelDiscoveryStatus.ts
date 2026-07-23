@@ -21,6 +21,8 @@ function providerObjectLabel(provider: string): string {
   switch (provider.trim()) {
     case "anthropic":
       return "Anthropic";
+    case "ai-gateway":
+      return "AI Gateway";
     case "openai":
       return "OpenAI";
     case "openai-compat":
@@ -46,6 +48,14 @@ export function formatModelDiscoveryErrorStatus(
   provider: string,
 ): PersonaModelDiscoveryStatus | null {
   const message = errorMessage(error);
+
+  if (provider.trim() === "ai-gateway") {
+    return {
+      message:
+        "Could not load models from AI Gateway. Confirm AI Gateway is running and its local profile is authenticated, then try again.",
+      tone: "warning",
+    };
+  }
 
   if (provider.trim() === "relay-mesh") {
     if (message.includes("waiting for the current member roster")) {

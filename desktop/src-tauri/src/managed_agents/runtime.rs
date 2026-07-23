@@ -1979,6 +1979,16 @@ pub fn spawn_agent_child(
     for (key, value) in super::env_vars::merged_user_env(&persona_over_global, &record.env_vars) {
         command.env(key, value);
     }
+
+    // AI Gateway credentials are owned by the locally installed `ai-gateway`
+    // profile, never by Buzz records. Resolve them immediately before spawn
+    // and inject only into the managed buzz-agent process environment.
+    if effective_command == "buzz-agent" && super::is_ai_gateway_provider(effective_provider) {
+        let gateway = super::resolve_ai_gateway_config()?;
+        for (key, value) in gateway.openai_compat_env() {
+            command.env(key, value);
+        }
+    }
     configure_runtime_cli(&mut command, runtime_meta);
 
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible

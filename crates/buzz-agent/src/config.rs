@@ -992,8 +992,12 @@ fn resolve_provider(
                 "anthropic" => Err(
                     "config: ANTHROPIC_API_KEY required".into(),
                 ),
-                "openai" | "openai-compat" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
-                "openai" | "openai-compat" => Err(
+                "openai" | "openai-compat" | "ai-gateway"
+                    if present_nonempty(openai_key) =>
+                {
+                    Ok(Provider::OpenAi)
+                }
+                "openai" | "openai-compat" | "ai-gateway" => Err(
                     "config: OPENAI_COMPAT_API_KEY required".into(),
                 ),
                 "databricks" => Ok(Provider::Databricks),
@@ -1220,6 +1224,14 @@ mod tests {
         );
         assert_eq!(
             resolve_provider(Some("openai"), None, Some("sk-openai"),).unwrap(),
+            Provider::OpenAi
+        );
+    }
+
+    #[test]
+    fn resolve_provider_routes_ai_gateway_through_openai_compat() {
+        assert_eq!(
+            resolve_provider(Some("ai-gateway"), None, Some("gateway-token")).unwrap(),
             Provider::OpenAi
         );
     }

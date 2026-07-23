@@ -25,6 +25,18 @@ test("model discovery status names missing OpenAI-compatible credentials", () =>
   assert.match(status?.message ?? "", /OpenAI models/);
 });
 
+test("AI Gateway discovery failure does not claim a built-in fallback", () => {
+  const status = formatModelDiscoveryErrorStatus(
+    new Error("AI Gateway is not reachable at http://localhost:8317"),
+    "ai-gateway",
+  );
+
+  assert.equal(status?.tone, "warning");
+  assert.match(status?.message ?? "", /AI Gateway/);
+  assert.match(status?.message ?? "", /running/);
+  assert.doesNotMatch(status?.message ?? "", /built-in model options/i);
+});
+
 test("Buzz shared compute names the empty state and next action", () => {
   const status = formatModelDiscoveryErrorStatus(
     new Error("no Buzz shared compute serving members are available"),

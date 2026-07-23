@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  getProviderApiKeyEnvVar,
   getDefaultPersonaRuntime,
   getPersonaModelOptions,
   getPersonaProviderOptions,
+  providerRequiresExplicitModel,
+  requiredCredentialEnvKeys,
   resetConfigForHarnessChange,
   runtimeSupportsLlmProviderSelection,
 } from "./agentConfigOptions.tsx";
@@ -64,6 +67,22 @@ test("getPersonaProviderOptions with no hideProviderIds omits the tail for a kno
   assert.ok(
     tail?.id !== "anthropic" || tail?.label === "Anthropic",
     "no duplicate tail for known provider",
+  );
+});
+
+test("AI Gateway is a first-class provider with desktop-managed credentials", () => {
+  const options = getPersonaProviderOptions("", "buzz-agent");
+  const gateway = options.find((option) => option.id === "ai-gateway");
+
+  assert.equal(gateway?.label, "AI Gateway");
+  assert.equal(providerRequiresExplicitModel("ai-gateway"), true);
+  assert.deepEqual(requiredCredentialEnvKeys("buzz-agent", "ai-gateway"), []);
+  assert.equal(getProviderApiKeyEnvVar("ai-gateway"), null);
+  assert.equal(
+    getPersonaProviderOptions("", "goose").some(
+      (option) => option.id === "ai-gateway",
+    ),
+    false,
   );
 });
 

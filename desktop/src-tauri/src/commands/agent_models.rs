@@ -75,6 +75,10 @@ pub async fn get_agent_models(
         // Discover models against the record snapshot so an out-of-date persona
         // cannot offer models for a provider this agent will not launch with.
         let discovery = saved_agent_model_discovery_config(record, &effective_command);
+        crate::managed_agents::validate_ai_gateway_runtime(
+            discovery.provider.as_deref(),
+            &effective_command,
+        )?;
 
         (
             resolved,
@@ -86,7 +90,8 @@ pub async fn get_agent_models(
         )
     }; // store lock released — subprocess runs without holding the lock
 
-    let merged_env = discovery_env_with_baked_floor(merged_env);
+    let mut merged_env = discovery_env_with_baked_floor(merged_env);
+    crate::managed_agents::apply_ai_gateway_env(&mut merged_env, effective_provider.as_deref())?;
     if let Some(models) = discover_openai_compatible_models(
         &state.http_client,
         effective_provider.as_deref(),
@@ -219,7 +224,9 @@ pub async fn discover_agent_models(
         }
     }
     let merged_env = crate::managed_agents::merged_user_env(&derived_env, &input.env_vars);
-    let merged_env = discovery_env_with_baked_floor(merged_env);
+    let mut merged_env = discovery_env_with_baked_floor(merged_env);
+    crate::managed_agents::validate_ai_gateway_runtime(input.provider.as_deref(), agent_command)?;
+    crate::managed_agents::apply_ai_gateway_env(&mut merged_env, input.provider.as_deref())?;
 
     // Buzz shared compute discovery must not depend on the local OpenAI ingress: that
     // client endpoint is started only after a live target is selected.
@@ -312,6 +319,8 @@ struct OpenAiModelListItem {
     id: String,
     #[serde(default)]
     created: Option<i64>,
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
@@ -320,7 +329,7 @@ fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
             .map(str::trim)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("openai" | "openai-compat")
+        Some("openai" | "openai-compat" | "ai-gateway")
     )
 }
 
@@ -473,7 +482,9 @@ fn normalize_openai_compatible_models(
         })
         .filter(|item| seen.insert(item.id.clone()))
         .map(|item| AgentModelInfo {
-            name: Some(openai_model_display_name(&item.id)),
+            name: item
+                .display_name
+                .or_else(|| Some(openai_model_display_name(&item.id))),
             id: item.id,
             description: None,
         })
@@ -503,12 +514,11 @@ async fn discover_openai_compatible_models(
     } else {
         openai_compatible_models_url_for_discovery(env)
     };
-    let response = client
-        .get(&url)
-        .bearer_auth(&api_key)
-        .send()
-        .await
-        .map_err(|error| format!("OpenAI model discovery request failed: {error}"))?;
+    let response =
+        crate::managed_agents::ai_gateway_models_request(client, &url, &api_key, provider)
+            .send()
+            .await
+            .map_err(|error| format!("OpenAI model discovery request failed: {error}"))?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
