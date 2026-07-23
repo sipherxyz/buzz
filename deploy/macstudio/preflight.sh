@@ -40,6 +40,14 @@ is_external_s3_endpoint() {
   esac
 }
 
+is_hex_key() {
+  test "${#1}" -eq 64 && ! grep -q '[^[:xdigit:]]' <<<"$1"
+}
+
+is_production_relay_url() {
+  test "$1" = "wss://buzz.sipher.gg:8443"
+}
+
 env_value() {
   local key="$1"
   local file="$2"
@@ -146,6 +154,39 @@ check_env() {
     fail "set BUZZ_UPS_CONFIRMED=true after verifying the Mac Studio and network equipment are UPS-backed"
     return 1
   }
+
+  local require_auth require_membership relay_private_key owner_pubkey relay_url
+  require_auth="$(env_value BUZZ_REQUIRE_AUTH_TOKEN "$ENV_FILE")"
+  require_membership="$(env_value BUZZ_REQUIRE_RELAY_MEMBERSHIP "$ENV_FILE")"
+  relay_private_key="$(env_value BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE")"
+  owner_pubkey="$(env_value RELAY_OWNER_PUBKEY "$ENV_FILE")"
+  relay_url="$(env_value RELAY_URL "$ENV_FILE")"
+
+  if test "$require_membership" = "true"; then
+    test "$require_auth" = "true" || {
+      fail "BUZZ_REQUIRE_AUTH_TOKEN=true is required before BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
+      return 1
+    }
+  fi
+
+  if test "$require_auth" = "true"; then
+    is_hex_key "$relay_private_key" || {
+      fail "BUZZ_RELAY_PRIVATE_KEY must be a stable 64-character hex key when BUZZ_REQUIRE_AUTH_TOKEN=true"
+      return 1
+    }
+  fi
+
+  if test "$require_membership" = "true"; then
+    is_hex_key "$owner_pubkey" || {
+      fail "RELAY_OWNER_PUBKEY must be a 64-character hex human owner pubkey when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
+      return 1
+    }
+    is_production_relay_url "$relay_url" || {
+      fail "RELAY_URL must be wss://buzz.sipher.gg:8443 when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
+      return 1
+    }
+  fi
+
   pass "production configuration and external S3"
 }
 
