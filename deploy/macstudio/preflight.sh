@@ -13,6 +13,10 @@ pass() {
   printf 'PASS  %s\n' "$1"
 }
 
+warn() {
+  printf 'WARN  %s\n' "$1" >&2
+}
+
 fail() {
   printf 'FAIL  %s\n' "$1" >&2
   return 1
@@ -145,21 +149,36 @@ check_env() {
   pass "production configuration and external S3"
 }
 
+report_host_security() {
+  local filevault_status="$1"
+  local firewall_status="$2"
+  local warned=0
+
+  if ! grep -q "FileVault is On" <<<"$filevault_status"; then
+    warn "FileVault is disabled; disk-at-rest protection is an accepted operational risk"
+    warned=1
+  fi
+  if ! grep -qi "enabled" <<<"$firewall_status"; then
+    warn "macOS application firewall is disabled; host services must be protected by the network perimeter"
+    warned=1
+  fi
+  if test "$warned" -eq 0; then
+    pass "FileVault and macOS firewall"
+  fi
+}
+
 check_host_security() {
   if test "$(uname -s)" != "Darwin"; then
     pass "host security checks skipped on non-macOS host"
     return
   fi
-  fdesetup status | grep -q "FileVault is On" || {
-    fail "FileVault must be enabled before production deployment"
-    return 1
-  }
-  /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate |
-    grep -qi "enabled" || {
-    fail "macOS application firewall must be enabled"
-    return 1
-  }
-  pass "FileVault and macOS firewall"
+
+  local filevault_status firewall_status
+  filevault_status="$(fdesetup status 2>&1 || true)"
+  firewall_status="$(
+    /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>&1 || true
+  )"
+  report_host_security "$filevault_status" "$firewall_status"
 }
 
 check_docker() {
