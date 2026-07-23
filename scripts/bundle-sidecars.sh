@@ -35,6 +35,10 @@ fi
 
 mkdir -p "$BINARIES_DIR"
 for bin in "${SIDECARS[@]}"; do
-    cp "$SRC_DIR/${bin}${EXE}" "$BINARIES_DIR/${bin}-${TARGET}${EXE}"
+    destination="$BINARIES_DIR/${bin}-${TARGET}${EXE}"
+    cp "$SRC_DIR/${bin}${EXE}" "$destination"
+    if [[ "$TARGET" != *windows* ]]; then
+        chmod 0755 "$destination"
+    fi
 done
 echo "Sidecars bundled for $TARGET"

@@ -148,6 +148,7 @@ require_fixed "$workflow" "-p git-credential-nostr" "git-credential-nostr sideca
 require_fixed "$workflow" "-p buzz-cli" "buzz CLI sidecar build"
 require_fixed "$workflow" "scripts/bundle-sidecars.sh" "sidecar bundling"
 require_fixed "$workflow" "desktop/scripts/sipher-release-config.mjs" "Sipher Tauri config generation"
+"$repo_root/scripts/test-bundle-sidecars.sh"
 
 require_fixed "$workflow" "Import optional Windows signing certificate" "optional PFX import"
 require_fixed "$workflow" "_unsigned.exe" "unsigned Windows preview marker"
