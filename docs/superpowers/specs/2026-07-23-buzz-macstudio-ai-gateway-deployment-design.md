@@ -53,7 +53,7 @@ Branches have the following roles:
 | `main` | Production-ready Sipher history | Source for release tags only |
 | `feature/*` | Product changes based on `develop` | None |
 | `fix/*` | Non-emergency fixes based on `develop` | None |
-| `sync/upstream-YYYYMMDD` | One auditable upstream merge | None |
+| `sync/upstream-YYYYMMDD` | Repo-owner upstream merge based on `main` | None |
 | `release/*` | Version and release metadata changes | Produces a tag after merge |
 | `hotfix/*` | Emergency correction based on `main` | Produces a patch tag after review |
 
@@ -61,8 +61,10 @@ The normal flow is:
 
 ```text
 feature/* ──PR──► develop ──release PR──► main ──tag──► immutable artifact
-                      ▲
-upstream/main ──► sync/upstream-YYYYMMDD
+                      ▲                    ▲
+                      │                    │
+                      └──── forward PR ────┤
+upstream/main ──► sync/upstream-YYYYMMDD ──PR
 ```
 
 `main` and `develop` are protected against direct pushes, force pushes, and
@@ -70,37 +72,40 @@ branch deletion. Required CI checks and at least one approving review apply to
 both. Release tags are immutable and may only be created by the release
 workflow or an explicitly authorized release administrator.
 
-### Upstream synchronization
+### Owner-initiated upstream synchronization
 
-Every synchronization starts from the current `origin/develop`:
+The repository owner initiates upstream synchronization only when Sipher needs
+a specific upstream change. Every synchronization starts from the current
+`origin/main`:
 
 ```bash
 git fetch origin --prune
 git fetch upstream --prune
-git switch develop
-git pull --ff-only origin develop
+git switch main
+git pull --ff-only origin main
 git switch -c sync/upstream-YYYYMMDD
 git merge --no-ff upstream/main
 ```
 
 Conflicts are resolved only on the sync branch. The branch receives the full
-CI suite and a dedicated PR into `develop`. The merge commit records the exact
-upstream parent, so no additional vendor branch is required.
+CI suite and a repository-owner PR directly into `main`. The merge commit
+records the exact upstream parent, so no additional vendor branch is required.
+Merging the sync PR does not deploy production because the Mac Studio accepts
+only an explicit release tag and immutable image digest.
+
+After the sync PR is merged, the repository owner opens a second PR from
+`main` into `develop`. The synchronization is not complete until that forward
+PR is merged, ensuring future feature and release work includes the upstream
+changes.
 
 The following operations are prohibited on shared branches:
 
 - Resetting `main` or `develop` to `upstream/main`.
 - Rebasing or force-pushing `main` or `develop`.
 - Reapplying Sipher changes as an undocumented patch stack.
-- Merging upstream directly into production `main`.
+- Merging upstream into `main` outside a repository-owner
+  `sync/upstream-YYYYMMDD` PR.
 
-After an upstream sync has passed integration testing in `develop`, it reaches
-`main` through the next release PR. This preserves Sipher commits and makes
-upstream regressions independently reversible.
-
-The Sipher platform owner checks upstream weekly and opens a sync PR at least
-once per month. A security fix rated high or critical is evaluated within one
-business day and integrated within three business days when applicable.
 Every sync PR records the old and new upstream commit SHAs, upstream release
 notes reviewed, conflicts resolved, and Sipher-specific regression suites run.
 
@@ -442,7 +447,8 @@ and tunnel are common failure domains.
 Git and release tests verify:
 
 - Protected-branch and tag rules.
-- Upstream merge rehearsal against `develop`.
+- Owner-initiated upstream merge against `main` and forward-merge into
+  `develop`.
 - Sipher tag parsing and artifact naming.
 - ARM64 and AMD64 image publication.
 - Digest-pinned deployment and rollback.
@@ -477,7 +483,7 @@ Mac Studio validation verifies:
 1. Grant the implementation identity GitHub `Write` access and verify branch,
    package, Actions, and pull-request permissions.
 2. Create and protect `develop`, protect `main`, configure Sipher artifact
-   ownership, and rehearse one upstream sync.
+   ownership, and document the owner-initiated upstream sync procedure.
 3. Build and sign the Sipher Desktop release pipeline.
 4. Implement AI Gateway support through feature PRs into `develop`.
 5. Distribute a signed release candidate to the 20-person engineering ring.
@@ -497,8 +503,9 @@ Mac Studio validation verifies:
   production branch.
 - The implementation identity can push branches, create PRs, publish packages,
   and read the private production image from the Mac Studio.
-- A rehearsal merge from `upstream/main` preserves all Sipher changes and
-  passes CI.
+- The owner-initiated sync procedure documents how a sync branch based on
+  `main` preserves Sipher changes, passes CI, and is forward-merged into
+  `develop` when synchronization is needed.
 - A hotfix merged to `main` is forward-merged into `develop` before closure.
 - An employee already authenticated with AI Gateway can select it, refresh its
   advertised models, select a model, and complete an agent turn without
