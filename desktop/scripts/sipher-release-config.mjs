@@ -40,6 +40,12 @@ function assertProductionRelayUrls(relayWsUrl, relayHttpUrl) {
   }
 }
 
+function assertProductionUpdaterEndpoint(updaterEndpoint) {
+  if (!updaterEndpoint.startsWith("https://")) {
+    throw new Error("BUZZ_UPDATER_ENDPOINT must use https://");
+  }
+}
+
 export function buildSipherReleaseConfig(env) {
   assertRequiredEnv(env);
 
@@ -52,6 +58,7 @@ export function buildSipherReleaseConfig(env) {
     "BUZZ_WINDOWS_CERTIFICATE_THUMBPRINT",
   );
 
+  assertProductionUpdaterEndpoint(updaterEndpoint);
   assertProductionRelayUrls(relayWsUrl, relayHttpUrl);
 
   const releaseConfig = {

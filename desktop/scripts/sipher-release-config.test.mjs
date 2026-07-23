@@ -31,8 +31,19 @@ test("buildSipherReleaseConfig builds the required production updater config", a
   assert.equal(config.bundle.windows, undefined);
 });
 
-test("buildSipherReleaseConfig rejects missing env vars and non-production relay urls", async () => {
+test("buildSipherReleaseConfig rejects missing env vars and non-production urls", async () => {
   const { buildSipherReleaseConfig } = await loadModule();
+
+  assert.throws(
+    () =>
+      buildSipherReleaseConfig({
+        BUZZ_UPDATER_PUBLIC_KEY: "public-key",
+        BUZZ_UPDATER_ENDPOINT: "http://updates.sipher.gg/latest.json",
+        BUZZ_RELAY_URL: "wss://relay.sipher.gg",
+        BUZZ_RELAY_HTTP: "https://relay.sipher.gg",
+      }),
+    /BUZZ_UPDATER_ENDPOINT must use https:\/\//,
+  );
 
   assert.throws(
     () =>
