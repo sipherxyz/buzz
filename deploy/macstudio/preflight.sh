@@ -98,6 +98,35 @@ env_has_key() {
   ' "$file"
 }
 
+duplicate_env_keys() {
+  local file="$1"
+  awk '
+    /^[[:space:]]*#/ { next }
+    index($0, "=") == 0 { next }
+    {
+      split($0, parts, "=")
+      name = parts[1]
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name == "") {
+        next
+      }
+      seen[name] += 1
+      if (seen[name] == 2) {
+        if (found) {
+          printf ", "
+        }
+        printf "%s", name
+        found = 1
+      }
+    }
+    END {
+      if (found) {
+        printf "\n"
+      }
+    }
+  ' "$file"
+}
+
 available_memory_bytes() {
   if test -n "${BUZZ_PREFLIGHT_AVAILABLE_BYTES:-}"; then
     printf '%s\n' "$BUZZ_PREFLIGHT_AVAILABLE_BYTES"
@@ -166,7 +195,12 @@ check_env() {
     fail "missing production env file: $ENV_FILE"
     return 1
   }
-  local key value
+  local key value duplicate_keys
+  duplicate_keys="$(duplicate_env_keys "$ENV_FILE")"
+  test -z "$duplicate_keys" || {
+    fail "duplicate environment assignments are not allowed in $ENV_FILE: $duplicate_keys"
+    return 1
+  }
   for key in POSTGRES_PASSWORD REDIS_PASSWORD BUZZ_S3_ENDPOINT BUZZ_S3_ACCESS_KEY BUZZ_S3_SECRET_KEY BUZZ_S3_BUCKET; do
     value="$(env_value "$key" "$ENV_FILE")"
     test -n "$value" || {

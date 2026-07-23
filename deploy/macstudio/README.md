@@ -44,6 +44,11 @@ output. A dirty/non-main checkout, insufficient resources, invalid production
 configuration or external S3, and an unavailable Docker engine remain hard
 failures.
 
+Define each key only once in `.env`. Preflight rejects duplicate assignments
+before reading any values because Compose resolves duplicates using the last
+assignment, which would otherwise make the reviewed and deployed configuration
+ambiguous.
+
 ## Closed-relay rollout
 
 Keep `BUZZ_REQUIRE_AUTH_TOKEN=false` and

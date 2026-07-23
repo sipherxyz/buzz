@@ -87,6 +87,10 @@ assert_success check_env
 write_env_fixture false false "$relay_private_key" "" "$production_relay_url"
 assert_success check_env
 
+write_env_fixture false false "$relay_private_key" "" "$production_relay_url"
+printf 'BUZZ_RELAY_PRIVATE_KEY=\n' >>"$ENV_FILE"
+assert_failure check_env
+
 write_env_fixture false false "not-a-valid-key" "" "$production_relay_url"
 assert_failure check_env
 
@@ -103,10 +107,18 @@ assert_failure check_env
 write_env_fixture typo false "$relay_private_key" "" "$production_relay_url"
 assert_failure check_env
 
+write_env_fixture false false "" "" "$production_relay_url"
+printf 'BUZZ_REQUIRE_AUTH_TOKEN=true\n' >>"$ENV_FILE"
+assert_failure check_env
+
 write_env_fixture false 1 "$relay_private_key" "$owner_pubkey" "$production_relay_url"
 assert_failure check_env
 
 write_env_fixture false typo "$relay_private_key" "$owner_pubkey" "$production_relay_url"
+assert_failure check_env
+
+write_env_fixture false false "" "" "$production_relay_url"
+printf 'BUZZ_REQUIRE_RELAY_MEMBERSHIP=true\n' >>"$ENV_FILE"
 assert_failure check_env
 
 write_env_fixture false true "$relay_private_key" "$owner_pubkey" "$production_relay_url"
@@ -119,6 +131,10 @@ write_env_fixture false false "" "" "ws://localhost:3000"
 assert_failure check_env
 
 write_env_fixture true false "$relay_private_key" "" "wss://other.example.com"
+assert_failure check_env
+
+write_env_fixture false false "" "" "$production_relay_url"
+printf 'RELAY_URL=wss://other.example.com\n' >>"$ENV_FILE"
 assert_failure check_env
 
 write_env_fixture true true "$relay_private_key" "$owner_pubkey" "ws://localhost:3000"
