@@ -9,6 +9,8 @@ updater release.
 The macOS artifacts are the release priority. Both Apple Silicon and Intel
 builds must sign, notarize, and pass verification before `latest.json` is
 published. The Windows job is optional and cannot block the macOS release.
+All Sipher release runs share one repository-wide concurrency group, so tag
+builds and manual retries execute serially.
 
 ## Required repository secrets
 
@@ -28,8 +30,10 @@ Configure every required secret before attempting a release.
 | `SIPHER_UPDATER_PRIVATE_KEY_PASSWORD` | Password protecting the updater private key |
 
 The updater public key and endpoint are embedded in the app. The private key
-and its password are used only by the release runner to sign updater artifacts.
-Never commit the private key, `.p12`, passwords, or generated release config.
+and password are step-scoped only to the updater key smoke and Tauri build
+steps; checkout, dependency installation, configuration, and sidecar builds do
+not receive them. Never commit the private key, `.p12`, passwords, or generated
+release config.
 
 ## Create the updater keypair
 
@@ -44,6 +48,12 @@ Store the displayed public key as `SIPHER_UPDATER_PUBLIC_KEY`. Store the full
 private key file as `SIPHER_UPDATER_PRIVATE_KEY`, preserving its newlines, and
 store the chosen password as `SIPHER_UPDATER_PRIVATE_KEY_PASSWORD`. Keep an
 offline encrypted backup. Do not reuse the Block updater keypair.
+
+Before it creates a draft release, the workflow uses the Tauri signer to sign a
+disposable payload, decodes the configured public key and signature, and runs
+`minisign` verification. A mismatched private key, public key, or password
+therefore fails without creating or publicizing a release. The `minisign`
+package is installed in a separate step before any signing secret is exposed.
 
 The production updater endpoint is:
 
@@ -98,6 +108,26 @@ If the certificate is absent, the workflow uploads an explicitly
 preview and its updater signature are never uploaded to the rolling release and
 are excluded from `latest.json`.
 
+For a signed build, `Get-AuthenticodeSignature` must report `Valid` before the
+installer is uploaded even as a temporary workflow artifact. The Windows job
+never uploads directly to a GitHub Release.
+
+## Pinned release runners
+
+Release jobs use explicit stable GitHub-hosted images and assert the actual
+host and Rust architectures before building:
+
+| Build | Runner | Required host/target |
+| --- | --- | --- |
+| macOS Apple Silicon | `macos-15` | `arm64` / `aarch64-apple-darwin` |
+| macOS Intel | `macos-15-intel` | `x86_64` / `x86_64-apple-darwin` |
+| Windows | `windows-2025` | x64 / `x86_64-pc-windows-msvc` |
+| Setup and promotion | `ubuntu-24.04` | control jobs only |
+
+Do not replace these with floating `*-latest` labels. Update the pinned labels
+deliberately when GitHub deprecates an image, and update the release contract in
+the same change.
+
 ## Preflight
 
 Before tagging:
@@ -141,11 +171,29 @@ dispatch is only a retry mechanism: select the existing `sipher-v<VERSION>` tag
 in the GitHub ref picker and enter the same bare version. The workflow rejects
 branches, mismatched versions, moved tags, and caller-selected source refs.
 
+The setup job verifies the updater keypair and creates the versioned release as
+a draft. Platform jobs upload only short-lived workflow artifacts. Once both
+macOS matrix legs have passed signing, notarization, Gatekeeper, entitlement,
+and stapler checks, the promotion job waits for the optional Windows job,
+uploads both DMGs plus any verified Windows installer to the draft, and then
+publishes it. Windows failure does not block promotion because only macOS
+success is required. This prevents an empty, single-architecture, or
+partially-attached public release. Unsigned previews remain
+versioned-release-only.
+
+The rolling updater is also protected by a monotonic SemVer guard. Before
+touching `sipher-desktop-latest`, the final job reads the currently published
+`latest.json`. An older queued tag or manual rerun may rebuild its immutable
+versioned release, but it skips all rolling assets and manifest updates. Equal
+versions may be retried, and newer versions upload payloads before
+`latest.json`, so clients never observe a manifest pointing to missing assets.
+
 ## Verify and cut over
 
 After the workflow completes:
 
 1. Confirm the `sipher-v<VERSION>` release contains both signed DMGs.
+   It must no longer be a draft.
 2. Confirm both `.app` bundles passed `codesign`, `spctl`, entitlements, and
    notarization checks in the workflow logs.
 3. Confirm `sipher-desktop-latest` contains both macOS updater archives,
