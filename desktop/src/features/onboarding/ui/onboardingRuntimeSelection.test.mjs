@@ -69,7 +69,7 @@ test("ready onboarding runtimes exclude hidden ready harnesses", () => {
   );
 });
 
-test("Sipher onboarding shows only its preferred Buzz Agent engine", () => {
+test("Sipher onboarding prefers Buzz Agent while preserving fallback engines", () => {
   const runtimes = [
     runtime("codex", "available", "logged_in"),
     runtime("buzz-agent", "available", "not_applicable"),
@@ -78,10 +78,23 @@ test("Sipher onboarding shows only its preferred Buzz Agent engine", () => {
 
   assert.deepEqual(
     getVisibleOnboardingRuntimes(runtimes, "buzz-agent").map(({ id }) => id),
-    ["buzz-agent"],
+    ["buzz-agent", "claude", "codex"],
   );
   assert.deepEqual(
     getReadyOnboardingRuntimes(runtimes, "buzz-agent").map(({ id }) => id),
-    ["buzz-agent"],
+    ["buzz-agent", "claude", "codex"],
+  );
+});
+
+test("Sipher onboarding can continue with a ready fallback engine", () => {
+  const runtimes = [
+    runtime("codex", "available", "logged_in"),
+    runtime("buzz-agent", "not_installed", "not_applicable"),
+    runtime("claude", "available", "logged_out"),
+  ];
+
+  assert.deepEqual(
+    getReadyOnboardingRuntimes(runtimes, "buzz-agent").map(({ id }) => id),
+    ["codex"],
   );
 });

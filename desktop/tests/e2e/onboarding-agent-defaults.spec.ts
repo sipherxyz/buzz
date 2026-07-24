@@ -100,7 +100,7 @@ test("Sipher defaults to Buzz Agent and AI Gateway with explicit model choice", 
   await navigateToSetupPage(page);
 
   await expect(page.getByTestId("onboarding-runtime-buzz-agent")).toBeVisible();
-  await expect(page.getByTestId("onboarding-runtime-claude")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-runtime-claude")).toBeVisible();
   await page.getByTestId("onboarding-setup-next").click();
 
   await expect(page.getByText("Agent engine", { exact: true })).toBeVisible();
@@ -128,6 +128,42 @@ test("Sipher defaults to Buzz Agent and AI Gateway with explicit model choice", 
       preferred_runtime: "buzz-agent",
       provider: "ai-gateway",
     });
+});
+
+test("Sipher can continue with a ready fallback when Buzz Agent is unavailable", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      distributionId: "sipher",
+      acpRuntimesCatalog: [
+        runtime("buzz-agent", "not_installed", {
+          status: "not_applicable",
+        }),
+        runtime("claude", "available", { status: "logged_in" }),
+      ],
+      globalAgentConfig: {
+        env_vars: {},
+        provider: null,
+        model: null,
+        preferred_runtime: null,
+      },
+    },
+    { skipCommunitySeed: true, skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await navigateToSetupPage(page);
+
+  await expect(page.getByTestId("onboarding-runtime-buzz-agent")).toBeVisible();
+  await expect(page.getByTestId("onboarding-runtime-claude")).toBeVisible();
+  await expect(page.getByTestId("onboarding-setup-next")).toBeEnabled();
+  await page.getByTestId("onboarding-setup-next").click();
+
+  await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
+    "Claude Code",
+  );
+  await expect.poll(() => readSavedRuntime(page)).toBe("claude");
 });
 
 test("setup shows only Claude Code and Codex as detected harnesses", async ({

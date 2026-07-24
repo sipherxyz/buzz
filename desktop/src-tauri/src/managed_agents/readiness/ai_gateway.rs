@@ -21,7 +21,7 @@ fn requirements_for_probe(
                 "--offline".to_string(),
             ],
             setup_copy: format!("run `ai-gateway --{profile} login`"),
-            availability: AcpAvailabilityStatus::NotInstalled,
+            availability: AcpAvailabilityStatus::Available,
         },
         Err(AiGatewayProbeError::MissingExecutable) => Requirement::CliLogin {
             probe_args: vec![
@@ -76,7 +76,7 @@ mod tests {
         assert!(matches!(
             logged_out.as_slice(),
             [Requirement::CliLogin {
-                availability: AcpAvailabilityStatus::NotInstalled,
+                availability: AcpAvailabilityStatus::Available,
                 ..
             }]
         ));

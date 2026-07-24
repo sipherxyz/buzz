@@ -10,9 +10,10 @@ export function runtimeIsVisibleInOnboarding(
   runtimeId: string,
   preferredRuntimeId?: string | null,
 ) {
-  return preferredRuntimeId
-    ? runtimeId === preferredRuntimeId
-    : VISIBLE_ONBOARDING_RUNTIME_IDS.has(runtimeId);
+  return (
+    runtimeId === preferredRuntimeId ||
+    VISIBLE_ONBOARDING_RUNTIME_IDS.has(runtimeId)
+  );
 }
 
 export function runtimeIsReadyForOnboarding(runtime: AcpRuntimeCatalogEntry) {
@@ -28,7 +29,10 @@ export function getVisibleOnboardingRuntimes(
   preferredRuntimeId?: string | null,
 ) {
   const runtimeOrder = preferredRuntimeId
-    ? [preferredRuntimeId]
+    ? [
+        preferredRuntimeId,
+        ...ONBOARDING_RUNTIME_ORDER.filter((id) => id !== preferredRuntimeId),
+      ]
     : ONBOARDING_RUNTIME_ORDER;
   return runtimes
     .filter((runtime) =>
