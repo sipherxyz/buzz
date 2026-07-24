@@ -10,6 +10,7 @@ import {
   useFeatureSnapshot,
 } from "@/shared/features/useFeatureEnabled";
 import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
+import { useDistributionProfile } from "@/shared/hooks/useDistributionProfile";
 import { cn } from "@/shared/lib/cn";
 import {
   Sidebar,
@@ -33,6 +34,7 @@ import {
   type SettingsSection,
   type SettingsSectionDescriptor,
 } from "./SettingsPanels";
+import { distributionAllowsSettingsSection } from "../settingsVisibility";
 
 export {
   DEFAULT_SETTINGS_SECTION,
@@ -125,10 +127,17 @@ export function SettingsView({
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
+  const distributionProfile = useDistributionProfile();
   const visibleSections = React.useMemo(() => {
     const membership = myMembershipQuery.data?.membership;
 
     return settingsSections.filter((s) => {
+      if (
+        distributionProfile &&
+        !distributionAllowsSettingsSection(s.value, distributionProfile)
+      ) {
+        return false;
+      }
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
@@ -147,7 +156,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data, featureState]);
+  }, [distributionProfile, myMembershipQuery.data, featureState]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);

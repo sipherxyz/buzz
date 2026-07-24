@@ -8,6 +8,7 @@ import {
 import { resetConfigForHarnessChange } from "@/features/agents/ui/agentConfigOptions";
 import { AgentDropdownSelect } from "@/features/agents/ui/agentConfigControls";
 import { createSaveCoalescer } from "./saveCoalescer";
+import { applyDistributionAgentDefaults } from "../sipherAgentDefaults";
 import { getBakedBuildEnv, type BakedEnvEntry } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
@@ -18,6 +19,7 @@ import type {
   GlobalAgentConfig,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { useDistributionProfile } from "@/shared/hooks/useDistributionProfile";
 import { Spinner } from "@/shared/ui/spinner";
 import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
 import { OnboardingFooter } from "./OnboardingFooter";
@@ -38,8 +40,8 @@ type DefaultConfigStepProps = {
 };
 
 function formatHarnessLabel(runtime: AcpRuntimeCatalogEntry | undefined) {
-  if (!runtime) return "Select a harness";
-  return runtime.id === "buzz-agent" ? "Buzz" : runtime.label;
+  if (!runtime) return "Select an agent engine";
+  return runtime.label;
 }
 
 function AgentDefaultsSection({
@@ -65,6 +67,9 @@ function AgentDefaultsSection({
     cancel: () => void;
   } | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [configIsValid, setConfigIsValid] = React.useState(false);
+  const distributionProfile = useDistributionProfile();
+  const distributionDefaultsAppliedRef = React.useRef(false);
 
   React.useEffect(() => {
     let unmounted = false;
@@ -110,14 +115,34 @@ function AgentDefaultsSection({
     };
   }, []);
 
+  React.useEffect(() => {
+    if (
+      isLoading ||
+      distributionProfile === null ||
+      distributionDefaultsAppliedRef.current
+    ) {
+      return;
+    }
+    distributionDefaultsAppliedRef.current = true;
+    const next = applyDistributionAgentDefaults(config, distributionProfile);
+    if (next === config) return;
+    setConfig(next);
+    coalescerRef.current?.enqueue(next);
+  }, [config, distributionProfile, isLoading]);
+
   const effectiveReadyRuntimeIds = React.useMemo(
     () =>
       readyRuntimeIds.length > 0
         ? readyRuntimeIds
-        : getReadyOnboardingRuntimes(runtimesQuery.data ?? []).map(
-            (runtime) => runtime.id,
-          ),
-    [readyRuntimeIds, runtimesQuery.data],
+        : getReadyOnboardingRuntimes(
+            runtimesQuery.data ?? [],
+            distributionProfile?.preferredAgentRuntime,
+          ).map((runtime) => runtime.id),
+    [
+      distributionProfile?.preferredAgentRuntime,
+      readyRuntimeIds,
+      runtimesQuery.data,
+    ],
   );
   const readyRuntimeIdSet = React.useMemo(
     () => new Set(effectiveReadyRuntimeIds),
@@ -127,10 +152,15 @@ function AgentDefaultsSection({
   // visibility here; a transient auth recheck must not invalidate that handoff.
   const readyRuntimes = React.useMemo(
     () =>
-      getVisibleOnboardingRuntimes(runtimesQuery.data ?? []).filter((runtime) =>
-        readyRuntimeIdSet.has(runtime.id),
-      ),
-    [readyRuntimeIdSet, runtimesQuery.data],
+      getVisibleOnboardingRuntimes(
+        runtimesQuery.data ?? [],
+        distributionProfile?.preferredAgentRuntime,
+      ).filter((runtime) => readyRuntimeIdSet.has(runtime.id)),
+    [
+      distributionProfile?.preferredAgentRuntime,
+      readyRuntimeIdSet,
+      runtimesQuery.data,
+    ],
   );
   const selectedRuntime = React.useMemo(
     () =>
@@ -138,7 +168,8 @@ function AgentDefaultsSection({
     [config.preferred_runtime, readyRuntimes],
   );
   const selectedRuntimeId = selectedRuntime?.id ?? "";
-  const configSurfaceLoading = isLoading || runtimesQuery.isLoading;
+  const configSurfaceLoading =
+    isLoading || distributionProfile === null || runtimesQuery.isLoading;
 
   const configSurfaceError =
     runtimesQuery.isError ||
@@ -168,9 +199,20 @@ function AgentDefaultsSection({
   React.useEffect(() => {
     if (configSurfaceLoading || selectedRuntimeId) return;
     if (readyRuntimes.length !== 1) return;
+    if (distributionProfile?.preferredAgentRuntime === readyRuntimes[0].id) {
+      const next = resetConfigForHarnessChange(
+        applyDistributionAgentDefaults(config, distributionProfile),
+        readyRuntimes[0].id,
+      );
+      setConfig(next);
+      coalescerRef.current?.enqueue(next);
+      return;
+    }
     handleHarnessChange(readyRuntimes[0].id);
   }, [
+    config,
     configSurfaceLoading,
+    distributionProfile,
     handleHarnessChange,
     readyRuntimes,
     selectedRuntimeId,
@@ -182,10 +224,16 @@ function AgentDefaultsSection({
   );
   React.useEffect(() => {
     onPersistenceStateChange({
-      canComplete: selectedRuntimeId.length > 0 && !isSaving,
+      canComplete: selectedRuntimeId.length > 0 && configIsValid && !isSaving,
       flush: flushPersistence,
     });
-  }, [flushPersistence, isSaving, onPersistenceStateChange, selectedRuntimeId]);
+  }, [
+    configIsValid,
+    flushPersistence,
+    isSaving,
+    onPersistenceStateChange,
+    selectedRuntimeId,
+  ]);
 
   return (
     <section className="w-full space-y-4 text-left text-sm">
@@ -196,7 +244,7 @@ function AgentDefaultsSection({
         </div>
       ) : configSurfaceError ? (
         <p className="py-4 text-center text-sm text-destructive">
-          Couldn't load harness settings. Go back and try again.
+          Couldn't load agent engine settings. Go back and try again.
         </p>
       ) : (
         <div className="space-y-7">
@@ -205,14 +253,14 @@ function AgentDefaultsSection({
               className="pl-3 text-sm font-medium"
               htmlFor="global-agent-default-harness"
             >
-              Default harness
+              Agent engine
             </label>
             <AgentDropdownSelect
               className="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
               id="global-agent-default-harness"
               onValueChange={handleHarnessChange}
               options={harnessOptions}
-              placeholder="Select a harness"
+              placeholder="Select an agent engine"
               placeholderClassName="text-foreground/70"
               testId="global-agent-default-harness"
               value={selectedRuntimeId}
@@ -234,6 +282,7 @@ function AgentDefaultsSection({
             }}
             onCustomModelEditingChange={setIsCustomModelEditing}
             onIsCustomProviderChange={setIsCustomProvider}
+            onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
             selectClassName="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
             disclosure="onboarding-essential"

@@ -57,6 +57,79 @@ async function readSavedRuntime(page: Parameters<typeof installMockBridge>[0]) {
   });
 }
 
+async function readSavedAgentDefaults(
+  page: Parameters<typeof installMockBridge>[0],
+) {
+  return await page.evaluate(async () => {
+    return await (
+      window as Window & {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload: unknown,
+        ) => Promise<{
+          model?: string | null;
+          preferred_runtime?: string | null;
+          provider?: string | null;
+        }>;
+      }
+    ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config", null);
+  });
+}
+
+test("Sipher defaults to Buzz Agent and AI Gateway with explicit model choice", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      distributionId: "sipher",
+      acpRuntimesCatalog: [
+        runtime("buzz-agent", "available", { status: "not_applicable" }),
+        runtime("claude", "available", { status: "logged_in" }),
+      ],
+      globalAgentConfig: {
+        env_vars: {},
+        provider: null,
+        model: null,
+        preferred_runtime: null,
+      },
+    },
+    { skipCommunitySeed: true, skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await navigateToSetupPage(page);
+
+  await expect(page.getByTestId("onboarding-runtime-buzz-agent")).toBeVisible();
+  await expect(page.getByTestId("onboarding-runtime-claude")).toHaveCount(0);
+  await page.getByTestId("onboarding-setup-next").click();
+
+  await expect(page.getByText("Agent engine", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
+    "Buzz Agent",
+  );
+  await expect(page.getByText("LLM connection", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("global-agent-provider")).toHaveText(
+    "AI Gateway",
+  );
+  await expect(page.getByTestId("global-agent-model")).toHaveText(
+    "Select a model",
+  );
+  await expect(page.getByTestId("onboarding-finish")).toBeDisabled();
+
+  await page.getByTestId("global-agent-model").click();
+  await page
+    .getByTestId("global-agent-model-option-goose-claude-4-6-opus")
+    .click();
+  await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
+  await expect
+    .poll(() => readSavedAgentDefaults(page))
+    .toMatchObject({
+      model: "goose-claude-4-6-opus",
+      preferred_runtime: "buzz-agent",
+      provider: "ai-gateway",
+    });
+});
+
 test("setup shows only Claude Code and Codex as detected harnesses", async ({
   page,
 }) => {
@@ -545,7 +618,7 @@ test("defaults requires a choice when multiple visible harnesses are ready", asy
   await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
 
   const harness = page.getByTestId("global-agent-default-harness");
-  await expect(harness).toHaveText("Select a harness");
+  await expect(harness).toHaveText("Select an agent engine");
   await expect(page.getByTestId("onboarding-finish")).toBeDisabled();
   await harness.click();
   await expect(

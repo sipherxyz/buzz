@@ -125,6 +125,10 @@ export function shouldShowModelStatusMessage(
   return showDescriptions || status !== null;
 }
 
+export function shouldAutoSelectModelForProvider(provider: string): boolean {
+  return provider.trim() !== "ai-gateway";
+}
+
 export type AgentConfigFieldsProps = {
   bakedEnv: BakedEnvEntry[];
   selectedRuntime: AcpRuntimeCatalogEntry | undefined;
@@ -320,6 +324,7 @@ export function AgentConfigFields({
       autoSelectedModelScopeRef.current = null;
       return;
     }
+    if (!shouldAutoSelectModelForProvider(trimmedProvider)) return;
     if ((config.model ?? "").trim().length > 0) return;
     if (modelDiscoveryLoading || discoveredModelOptions === null) return;
     const selectionScope = `${selectedRuntimeId}:${trimmedProvider}`;
@@ -611,7 +616,7 @@ export function AgentConfigFields({
             className={cn("text-sm font-medium", fieldLabelClassName)}
             htmlFor="global-agent-provider"
           >
-            Provider
+            LLM connection
           </label>
           {!useCustomSelect && useChevronSelectIcon ? (
             <div className="relative">
@@ -626,10 +631,10 @@ export function AgentConfigFields({
           )}
           {isCustomProvider ? (
             <Input
-              aria-label="Custom global provider ID"
+              aria-label="Custom LLM connection ID"
               autoCorrect="off"
               onChange={(e) => handleCustomProviderInput(e.target.value)}
-              placeholder="Custom provider ID"
+              placeholder="Custom LLM connection ID"
               value={providerValue}
             />
           ) : null}

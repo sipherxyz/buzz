@@ -11,6 +11,7 @@ import {
 import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
 import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
+import { useDistributionProfile } from "@/shared/hooks/useDistributionProfile";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
@@ -39,6 +40,7 @@ type SetupStepProps = {
 };
 
 type SetupStepContentProps = SetupStepProps & {
+  preferredRuntimeId: string | null;
   state: SetupStepState;
 };
 
@@ -550,16 +552,18 @@ function RuntimeProvidersLoadingState() {
 function RuntimeProvidersSection({
   installResults,
   onInstallResultsChange,
+  preferredRuntimeId,
   runtimeProviders,
 }: {
   installResults: InstallResultsState;
   onInstallResultsChange: React.Dispatch<
     React.SetStateAction<InstallResultsState>
   >;
+  preferredRuntimeId: string | null;
   runtimeProviders: SetupStepState["runtimeProviders"];
 }) {
   const { errorMessage, isChecking, items } = runtimeProviders;
-  const orderedItems = getVisibleOnboardingRuntimes(items);
+  const orderedItems = getVisibleOnboardingRuntimes(items, preferredRuntimeId);
   const installMutation = useInstallAcpRuntimeMutation();
 
   function handleInstall(runtimeId: string) {
@@ -643,6 +647,7 @@ function SetupStepContent({
   actions,
   direction,
   onReadyRuntimeIdsChange,
+  preferredRuntimeId,
   state,
 }: SetupStepContentProps) {
   const { runtimeProviders } = state;
@@ -650,10 +655,11 @@ function SetupStepContent({
     React.useState<InstallResultsState>({});
   const readyRuntimeIds = React.useMemo(
     () =>
-      getReadyOnboardingRuntimes(runtimeProviders.items).map(
-        (runtime) => runtime.id,
-      ),
-    [runtimeProviders.items],
+      getReadyOnboardingRuntimes(
+        runtimeProviders.items,
+        preferredRuntimeId,
+      ).map((runtime) => runtime.id),
+    [preferredRuntimeId, runtimeProviders.items],
   );
   const readyRuntimeIdsKey = readyRuntimeIds.join("\0");
   // The key prevents catalog object refreshes from creating an effect loop
@@ -673,6 +679,7 @@ function SetupStepContent({
       <RuntimeProvidersSection
         installResults={installResults}
         onInstallResultsChange={setInstallResults}
+        preferredRuntimeId={preferredRuntimeId}
         runtimeProviders={runtimeProviders}
       />
 
@@ -707,12 +714,14 @@ export function SetupStep({
   onReadyRuntimeIdsChange,
 }: SetupStepProps) {
   const state = useSetupStepState();
+  const distributionProfile = useDistributionProfile();
 
   return (
     <SetupStepContent
       actions={actions}
       direction={direction}
       onReadyRuntimeIdsChange={onReadyRuntimeIdsChange}
+      preferredRuntimeId={distributionProfile?.preferredAgentRuntime ?? null}
       state={state}
     />
   );

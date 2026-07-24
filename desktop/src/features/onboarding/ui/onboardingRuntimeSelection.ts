@@ -6,8 +6,13 @@ const VISIBLE_ONBOARDING_RUNTIME_IDS = new Set<string>(
   ONBOARDING_RUNTIME_ORDER,
 );
 
-export function runtimeIsVisibleInOnboarding(runtimeId: string) {
-  return VISIBLE_ONBOARDING_RUNTIME_IDS.has(runtimeId);
+export function runtimeIsVisibleInOnboarding(
+  runtimeId: string,
+  preferredRuntimeId?: string | null,
+) {
+  return preferredRuntimeId
+    ? runtimeId === preferredRuntimeId
+    : VISIBLE_ONBOARDING_RUNTIME_IDS.has(runtimeId);
 }
 
 export function runtimeIsReadyForOnboarding(runtime: AcpRuntimeCatalogEntry) {
@@ -20,20 +25,26 @@ export function runtimeIsReadyForOnboarding(runtime: AcpRuntimeCatalogEntry) {
 
 export function getVisibleOnboardingRuntimes(
   runtimes: readonly AcpRuntimeCatalogEntry[],
+  preferredRuntimeId?: string | null,
 ) {
+  const runtimeOrder = preferredRuntimeId
+    ? [preferredRuntimeId]
+    : ONBOARDING_RUNTIME_ORDER;
   return runtimes
-    .filter((runtime) => runtimeIsVisibleInOnboarding(runtime.id))
+    .filter((runtime) =>
+      runtimeIsVisibleInOnboarding(runtime.id, preferredRuntimeId),
+    )
     .sort(
       (left, right) =>
-        ONBOARDING_RUNTIME_ORDER.indexOf(left.id) -
-        ONBOARDING_RUNTIME_ORDER.indexOf(right.id),
+        runtimeOrder.indexOf(left.id) - runtimeOrder.indexOf(right.id),
     );
 }
 
 export function getReadyOnboardingRuntimes(
   runtimes: readonly AcpRuntimeCatalogEntry[],
+  preferredRuntimeId?: string | null,
 ) {
-  return getVisibleOnboardingRuntimes(runtimes).filter(
+  return getVisibleOnboardingRuntimes(runtimes, preferredRuntimeId).filter(
     runtimeIsReadyForOnboarding,
   );
 }

@@ -68,3 +68,20 @@ test("ready onboarding runtimes exclude hidden ready harnesses", () => {
     ["claude"],
   );
 });
+
+test("Sipher onboarding shows only its preferred Buzz Agent engine", () => {
+  const runtimes = [
+    runtime("codex", "available", "logged_in"),
+    runtime("buzz-agent", "available", "not_applicable"),
+    runtime("claude", "available", "logged_in"),
+  ];
+
+  assert.deepEqual(
+    getVisibleOnboardingRuntimes(runtimes, "buzz-agent").map(({ id }) => id),
+    ["buzz-agent"],
+  );
+  assert.deepEqual(
+    getReadyOnboardingRuntimes(runtimes, "buzz-agent").map(({ id }) => id),
+    ["buzz-agent"],
+  );
+});
