@@ -21,6 +21,7 @@ import test from "node:test";
 import {
   CANONICAL_CONFIG_BEHAVIORS,
   resolveDisclosure,
+  shouldAutoSelectModelForProvider,
   shouldShowModelStatusMessage,
 } from "./AgentConfigFields.tsx";
 
@@ -35,6 +36,11 @@ test("canonical behaviors: onboarding's values are the only behavior", () => {
     // Model/effort are locked until a provider exists (no saveable invalid state).
     requireProviderForModelAndEffort: true,
   });
+});
+
+test("AI Gateway requires an explicit model choice", () => {
+  assert.equal(shouldAutoSelectModelForProvider("ai-gateway"), false);
+  assert.equal(shouldAutoSelectModelForProvider("anthropic"), true);
 });
 
 test("full disclosure shows every field, escape hatch, and description", () => {

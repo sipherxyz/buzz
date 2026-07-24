@@ -7,8 +7,9 @@ pub(crate) use agent_env::{
     baked_build_env, build_buzz_agent_provider_defaults, discovery_env_with_baked_floor,
 };
 pub(crate) use ai_gateway::{
-    ai_gateway_models_request, apply_ai_gateway_env, is_ai_gateway_provider,
-    resolve_ai_gateway_config, validate_ai_gateway_runtime,
+    discover_ai_gateway_models, is_ai_gateway_provider, probe_ai_gateway_status,
+    selected_profile_for_env, validate_ai_gateway_runtime, AiGatewayLaunchSpec, AiGatewayModel,
+    AiGatewayProbeError, AiGatewayStatus, AI_GATEWAY_PROVIDER_ID,
 };
 mod backend;
 pub(crate) mod config_bridge;

@@ -20,6 +20,7 @@ concurrency:
 permissions: {}
 
 env:
+  BUZZ_BUILD_DISTRIBUTION: sipher
   BUZZ_RELAY_URL: wss://buzz.sipher.gg:8443
   BUZZ_RELAY_HTTP: https://buzz.sipher.gg:8443
   BUZZ_UPDATER_ENDPOINT: https://github.com/sipherxyz/buzz/releases/download/sipher-desktop-latest/latest.json

@@ -50,6 +50,7 @@ use crate::managed_agents::{
     types::{AcpAvailabilityStatus, AgentDefinition, ManagedAgentRecord},
 };
 
+mod ai_gateway;
 mod cli_login;
 pub(crate) mod cli_probe;
 
@@ -328,7 +329,8 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") | Some("ai-gateway") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("ai-gateway") => Some("OPENAI_MODEL"),
         _ => None,
     };
     let model_present = effective
@@ -371,6 +373,9 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "DATABRICKS_HOST".to_string(),
                 });
             }
+        Some("ai-gateway") => {
+            missing.extend(ai_gateway::requirements(effective));
+        }
         _ => {
             // Unknown provider or no provider yet — only the NormalizedField
             // requirement above captures this gap.

@@ -37,6 +37,7 @@ import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { shouldAutoJoinSipher } from "@/features/communities/sipherBootstrap";
 import {
   onAddCommunityPrefillAvailable,
   requestAddCommunityPrefill,
@@ -46,6 +47,11 @@ import { CommunityApplyErrorScreen } from "@/features/communities/ui/CommunityAp
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
 import { createBuzzQueryClient } from "@/shared/api/queryClient";
 import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
+import {
+  getDistributionProfile,
+  OSS_DISTRIBUTION_PROFILE,
+  type DistributionProfile,
+} from "@/shared/api/tauriDistribution";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import {
   type AddCommunityDeepLinkPayload,
@@ -294,6 +300,23 @@ function CommunityApp({
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] = useState(false);
   const [resumeFirstCommunityPage, setResumeFirstCommunityPage] =
     useState<FirstCommunityPage | null>(null);
+  const [distributionProfile, setDistributionProfile] =
+    useState<DistributionProfile | null>(null);
+  const autoJoinAttemptRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getDistributionProfile()
+      .then((profile) => {
+        if (active) setDistributionProfile(profile);
+      })
+      .catch(() => {
+        if (active) setDistributionProfile(OSS_DISTRIBUTION_PROFILE);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Surface nest-related backend events (repos-dir errors, legacy migration)
   // as toasts. Mounted before useCommunityInit so the listeners are registered
@@ -319,6 +342,36 @@ function CommunityApp({
     communityKey,
     sharedIdentity,
   );
+  const setupDefaultRelayUrl = community.needsSetup
+    ? community.defaultRelayUrl
+    : null;
+
+  useEffect(() => {
+    if (!distributionProfile || setupDefaultRelayUrl === null) return;
+    if (
+      !shouldAutoJoinSipher({
+        profile: distributionProfile,
+        communityCount: communities.length,
+        hasOnboardingTransaction: communityOnboarding.transaction !== null,
+      })
+    ) {
+      return;
+    }
+
+    const attemptKey = `${distributionProfile.id}:${setupDefaultRelayUrl}`;
+    if (autoJoinAttemptRef.current === attemptKey) return;
+    autoJoinAttemptRef.current = attemptKey;
+    communityOnboarding.start({
+      source: "first-community",
+      relayUrl: setupDefaultRelayUrl,
+      communityName: distributionProfile.defaultCommunityName ?? "Sipher",
+    });
+  }, [
+    communities.length,
+    communityOnboarding,
+    distributionProfile,
+    setupDefaultRelayUrl,
+  ]);
 
   const handleCommunityOnboardingConnect = useCallback(() => {
     const transaction = communityOnboarding.transaction;
@@ -456,14 +509,25 @@ function CommunityApp({
   let appContent: ReactNode = null;
   if (!transaction) {
     if (community.needsSetup) {
-      // Show welcome setup for first-run users with no communities
-      appContent = (
-        <WelcomeSetup
-          defaultRelayUrl={community.defaultRelayUrl}
-          initialPage={resumeFirstCommunityPage ?? undefined}
-          onBack={onBackToMachineConfig}
-        />
-      );
+      const isLoadingDistribution = distributionProfile === null;
+      const isAutoJoining =
+        autoJoinAttemptRef.current === null &&
+        distributionProfile !== null &&
+        shouldAutoJoinSipher({
+          profile: distributionProfile,
+          communityCount: communities.length,
+          hasOnboardingTransaction: false,
+        });
+      appContent =
+        isLoadingDistribution || isAutoJoining ? (
+          <AppLoadingGate />
+        ) : (
+          <WelcomeSetup
+            defaultRelayUrl={community.defaultRelayUrl}
+            initialPage={resumeFirstCommunityPage ?? undefined}
+            onBack={onBackToMachineConfig}
+          />
+        );
     } else if ("error" in community && community.error) {
       // Surface apply failures so the user can retry or change community.
       appContent = (

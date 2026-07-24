@@ -557,6 +557,12 @@ fn name_matches_known_binary_rejects_node() {
 }
 
 #[test]
+fn name_matches_known_binary_accepts_ai_gateway_wrapper() {
+    assert!(super::name_matches_known_binary("ai-gateway"));
+    assert!(super::name_matches_known_binary("ai-gateway.exe"));
+}
+
+#[test]
 fn name_matches_interpreter_accepts_node() {
     // `node` IS a known script interpreter and must be recognized.
     assert!(super::name_matches_interpreter("node"));

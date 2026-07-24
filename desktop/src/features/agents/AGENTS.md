@@ -66,6 +66,11 @@ with a TypeScript lookup table or an id comparison in a component.
    setup page derives visible and ready harnesses from the runtime catalog and
    only offers install or sign-in actions. The following defaults page is the
    sole onboarding surface that chooses and persists `preferred_runtime`.
+   A distribution profile may narrow the setup page to its preferred runtime
+   and may fill absent runtime/provider defaults, but it must not overwrite
+   saved values or introduce a second capability table. AI Gateway model
+   discovery never auto-selects the first result; the user must explicitly
+   choose a model.
    `onboarding-agent-defaults.spec.ts` is the acceptance gate for anything
    touching this flow or the shared renderer.
 

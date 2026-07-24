@@ -125,6 +125,27 @@ Don't build from source, and don't use the OSS release — use the internal buil
 
 Download the latest build from [`squareup/buzz-releases` releases](https://github.com/squareup/buzz-releases/releases/latest) and install it.
 
+### I use the Sipher internal build
+
+The Sipher build creates a local identity and joins the pre-provisioned
+community at `wss://buzz.sipher.gg:8443`; it does not require a Builderlab
+account. The relay is intentionally open to self-registration, so it must be
+reachable only from the trusted company LAN or VPN.
+
+Install and authenticate [Sipher AI Gateway](https://github.com/sipherxyz/ai-gateway)
+on each employee machine before creating an agent:
+
+```bash
+ai-gateway --prod login
+ai-gateway --prod status --offline
+ai-gateway --prod models
+```
+
+The desktop uses the CLI for readiness and model discovery, then launches the
+bundled Buzz Agent through AI Gateway. Buzz does not read or persist the gateway
+secret. Custom relays, agent engines, and other LLM connections remain
+available from advanced Settings.
+
 ### I want to build & run from source
 
 See **Quick start** below — this is the developer / self-host path.

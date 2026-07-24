@@ -218,11 +218,10 @@ check_env() {
     return 1
   }
 
-  local require_auth require_membership relay_private_key owner_pubkey relay_url
+  local require_auth require_membership relay_private_key relay_url
   require_auth="$(env_value BUZZ_REQUIRE_AUTH_TOKEN "$ENV_FILE")"
   require_membership="$(env_value BUZZ_REQUIRE_RELAY_MEMBERSHIP "$ENV_FILE")"
   relay_private_key="$(env_value BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE")"
-  owner_pubkey="$(env_value RELAY_OWNER_PUBKEY "$ENV_FILE")"
   relay_url="$(env_value RELAY_URL "$ENV_FILE")"
 
   is_boolean "$require_auth" || {
@@ -237,6 +236,14 @@ check_env() {
     fail "RELAY_URL must be wss://buzz.sipher.gg:8443"
     return 1
   }
+  test "$require_auth" = "false" || {
+    fail "Sipher LAN self-registration requires BUZZ_REQUIRE_AUTH_TOKEN=false"
+    return 1
+  }
+  test "$require_membership" = "false" || {
+    fail "Sipher LAN self-registration requires BUZZ_REQUIRE_RELAY_MEMBERSHIP=false"
+    return 1
+  }
 
   if env_has_key BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE"; then
     is_hex_key "$relay_private_key" || {
@@ -245,27 +252,7 @@ check_env() {
     }
   fi
 
-  if test "$require_membership" = "true"; then
-    test "$require_auth" = "true" || {
-      fail "BUZZ_REQUIRE_AUTH_TOKEN=true is required before BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
-      return 1
-    }
-  fi
-
-  if test "$require_auth" = "true"; then
-    env_has_key BUZZ_RELAY_PRIVATE_KEY "$ENV_FILE" || {
-      fail "BUZZ_RELAY_PRIVATE_KEY must be a stable 64-character hex key when BUZZ_REQUIRE_AUTH_TOKEN=true"
-      return 1
-    }
-  fi
-
-  if test "$require_membership" = "true"; then
-    is_hex_key "$owner_pubkey" || {
-      fail "RELAY_OWNER_PUBKEY must be a 64-character hex human owner pubkey when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
-      return 1
-    }
-  fi
-
+  warn "Sipher LAN self-registration is enabled; restrict buzz.sipher.gg:8443 to the trusted LAN/VPN perimeter"
   pass "production configuration and external S3"
 }
 

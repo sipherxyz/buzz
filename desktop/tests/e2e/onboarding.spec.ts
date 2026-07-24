@@ -630,6 +630,59 @@ test("first-community choices route join, create, owner, and member intents", as
   await expect(page.getByTestId("invite-redeem-submit")).toBeEnabled();
 });
 
+test("clean Sipher build joins its compiled community without Builderlab", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    { distributionId: "sipher" },
+    {
+      relayWsUrl: "wss://buzz.sipher.gg:8443",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Build your profile" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Create a community/ }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("hosted-community-create-surface")).toHaveCount(
+    0,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const raw = window.localStorage.getItem("buzz-communities");
+        if (!raw) return [];
+        return (
+          JSON.parse(raw) as Array<{ name: string; relayUrl: string }>
+        ).map(({ name, relayUrl }) => ({ name, relayUrl }));
+      }),
+    )
+    .toEqual([
+      {
+        name: "Sipher",
+        relayUrl: "wss://buzz.sipher.gg:8443",
+      },
+    ]);
+
+  await page.getByTestId("community-profile-back").click();
+  await expect(
+    page.getByRole("heading", { name: "Join a community" }),
+  ).toBeVisible();
+});
+
 test("first-community owner can connect an existing hosted community", async ({
   page,
 }) => {

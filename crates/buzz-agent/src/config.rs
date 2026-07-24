@@ -736,10 +736,15 @@ impl Config {
     pub fn from_env() -> Result<Self, String> {
         let databricks_host = env("DATABRICKS_HOST");
         let databricks_model = env("DATABRICKS_MODEL");
+        let requested_provider = env("BUZZ_AGENT_PROVIDER");
+        let uses_ai_gateway = requested_provider
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("ai-gateway"));
         let provider = resolve_provider(
-            env("BUZZ_AGENT_PROVIDER").as_deref(),
+            requested_provider.as_deref(),
             env("ANTHROPIC_API_KEY").as_deref(),
             env("OPENAI_COMPAT_API_KEY").as_deref(),
+            env("OPENAI_API_KEY").as_deref(),
         )?;
 
         // Universal model override — takes priority over provider-specific model
@@ -764,6 +769,13 @@ impl Config {
                 .ok_or_else(|| "config: ANTHROPIC_MODEL required".to_string())?,
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 OpenAiApi::Auto, // unused for Anthropic
+            ),
+            Provider::OpenAi if uses_ai_gateway => (
+                req("OPENAI_API_KEY")?,
+                resolve_model(buzz_agent_model.as_deref(), env("OPENAI_MODEL").as_deref())
+                    .ok_or_else(|| "config: BUZZ_AGENT_MODEL required".to_string())?,
+                req("OPENAI_BASE_URL")?,
+                OpenAiApi::Chat,
             ),
             Provider::OpenAi => (
                 req("OPENAI_COMPAT_API_KEY")?,
@@ -982,6 +994,7 @@ fn present_nonempty(v: Option<&str>) -> bool {
 fn resolve_provider(
     requested: Option<&str>,
     anthropic_key: Option<&str>,
+    openai_compat_key: Option<&str>,
     openai_key: Option<&str>,
 ) -> Result<Provider, String> {
     match requested.map(str::trim).filter(|s| !s.is_empty()) {
@@ -992,14 +1005,15 @@ fn resolve_provider(
                 "anthropic" => Err(
                     "config: ANTHROPIC_API_KEY required".into(),
                 ),
-                "openai" | "openai-compat" | "ai-gateway"
-                    if present_nonempty(openai_key) =>
+                "openai" | "openai-compat" if present_nonempty(openai_compat_key) =>
                 {
                     Ok(Provider::OpenAi)
                 }
-                "openai" | "openai-compat" | "ai-gateway" => Err(
+                "openai" | "openai-compat" => Err(
                     "config: OPENAI_COMPAT_API_KEY required".into(),
                 ),
+                "ai-gateway" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
+                "ai-gateway" => Err("config: OPENAI_API_KEY required".into()),
                 "databricks" => Ok(Provider::Databricks),
                 "databricks_v2" | "databricks-v2" => Ok(Provider::DatabricksV2),
                 _ => Err(format!(
@@ -1219,37 +1233,40 @@ mod tests {
     #[test]
     fn resolve_provider_keeps_requested_provider_when_token_present() {
         assert_eq!(
-            resolve_provider(Some("anthropic"), Some("sk-ant"), None,).unwrap(),
+            resolve_provider(Some("anthropic"), Some("sk-ant"), None, None).unwrap(),
             Provider::Anthropic
         );
         assert_eq!(
-            resolve_provider(Some("openai"), None, Some("sk-openai"),).unwrap(),
+            resolve_provider(Some("openai"), None, Some("sk-openai"), None).unwrap(),
             Provider::OpenAi
         );
     }
 
     #[test]
-    fn resolve_provider_routes_ai_gateway_through_openai_compat() {
+    fn resolve_provider_routes_ai_gateway_through_standard_openai_env() {
         assert_eq!(
-            resolve_provider(Some("ai-gateway"), None, Some("gateway-token")).unwrap(),
+            resolve_provider(Some("ai-gateway"), None, None, Some("managed-by-gateway")).unwrap(),
             Provider::OpenAi
         );
+        let err =
+            resolve_provider(Some("ai-gateway"), None, Some("compat-token"), None).unwrap_err();
+        assert!(err.contains("OPENAI_API_KEY required"), "{err}");
     }
 
     #[test]
     fn resolve_provider_errors_when_requested_provider_key_missing() {
         // No fallback — missing key returns an error regardless of Databricks availability.
-        let err = resolve_provider(Some("anthropic"), None, None).unwrap_err();
+        let err = resolve_provider(Some("anthropic"), None, None, None).unwrap_err();
         assert!(err.contains("ANTHROPIC_API_KEY required"), "{err}");
 
-        let err = resolve_provider(Some("openai-compat"), None, Some("   ")).unwrap_err();
+        let err = resolve_provider(Some("openai-compat"), None, Some("   "), None).unwrap_err();
         assert!(err.contains("OPENAI_COMPAT_API_KEY required"), "{err}");
     }
 
     #[test]
     fn resolve_provider_errors_when_provider_env_absent() {
         // No implicit inference — absent BUZZ_AGENT_PROVIDER is an error.
-        let err = resolve_provider(None, None, None).unwrap_err();
+        let err = resolve_provider(None, None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER is required"), "{err}");
     }
 
@@ -1259,19 +1276,19 @@ mod tests {
         // When BUZZ_AGENT_PROVIDER=databricks, resolve_provider succeeds regardless
         // of DATABRICKS_HOST/MODEL (those are validated later in from_env()).
         assert_eq!(
-            resolve_provider(Some("databricks"), None, None).unwrap(),
+            resolve_provider(Some("databricks"), None, None, None).unwrap(),
             Provider::Databricks
         );
         // Missing key for other providers still errors — no Databricks fallback.
-        let err = resolve_provider(Some("openai"), None, None).unwrap_err();
+        let err = resolve_provider(Some("openai"), None, None, None).unwrap_err();
         assert!(err.contains("OPENAI_COMPAT_API_KEY required"), "{err}");
-        let err = resolve_provider(None, None, None).unwrap_err();
+        let err = resolve_provider(None, None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER is required"), "{err}");
     }
 
     #[test]
     fn resolve_provider_unsupported_error_preserves_user_casing() {
-        let err = resolve_provider(Some("OpenAIish"), None, None).unwrap_err();
+        let err = resolve_provider(Some("OpenAIish"), None, None, None).unwrap_err();
         assert!(err.contains("BUZZ_AGENT_PROVIDER=OpenAIish"));
     }
 

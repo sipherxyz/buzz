@@ -82,7 +82,9 @@ grep -q '^WARN  macOS application firewall is disabled; host services must be pr
   <<<"$security_output"
 
 write_env_fixture false false "" "" "$production_relay_url"
-assert_success check_env
+lan_policy_output="$(check_env 2>&1)"
+assert_output_contains "$lan_policy_output" \
+  "WARN  Sipher LAN self-registration is enabled; restrict buzz.sipher.gg:8443 to the trusted LAN/VPN perimeter"
 
 write_env_fixture false false "$relay_private_key" "" "$production_relay_url"
 assert_success check_env
@@ -141,7 +143,7 @@ write_env_fixture true true "$relay_private_key" "$owner_pubkey" "ws://localhost
 assert_failure check_env
 
 write_env_fixture true true "$relay_private_key" "$owner_pubkey" "$production_relay_url"
-assert_success check_env
+assert_failure check_env
 
 write_env_fixture false false "" "" "$production_relay_url"
 compose_output="$(
