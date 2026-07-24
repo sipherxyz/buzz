@@ -127,6 +127,8 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Desktop build policy exposed by the native distribution command. */
+  distributionId?: "oss" | "sipher";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
