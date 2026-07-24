@@ -1,7 +1,7 @@
 # Sipher Self-Hosted Onboarding and AI Gateway Design
 
 **Date:** 2026-07-24  
-**Status:** Approved for implementation planning  
+**Status:** Implemented; automated verification complete, manual release smoke pending
 **Target repository:** `sipherxyz/buzz`  
 **Target distribution:** Sipher-managed desktop builds
 
