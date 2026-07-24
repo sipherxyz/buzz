@@ -107,10 +107,11 @@ fn is_cross_platform_absolute(path: &std::path::Path) -> bool {
         return true;
     }
     let value = path.to_string_lossy().as_bytes().to_vec();
-    value.len() >= 3
-        && value[0].is_ascii_alphabetic()
-        && value[1] == b':'
-        && matches!(value[2], b'\\' | b'/')
+    value.first() == Some(&b'/')
+        || value.len() >= 3
+            && value[0].is_ascii_alphabetic()
+            && value[1] == b':'
+            && matches!(value[2], b'\\' | b'/')
 }
 
 pub(crate) fn build_ai_gateway_launch_spec(
