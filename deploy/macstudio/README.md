@@ -44,6 +44,34 @@ output. A dirty/non-main checkout, insufficient resources, invalid production
 configuration or external S3, and an unavailable Docker engine remain hard
 failures.
 
+Define each key only once in `.env`. Preflight rejects duplicate assignments
+before reading any values because Compose resolves duplicates using the last
+assignment, which would otherwise make the reviewed and deployed configuration
+ambiguous.
+
+## Closed-relay rollout
+
+Keep `BUZZ_REQUIRE_AUTH_TOKEN=false` and
+`BUZZ_REQUIRE_RELAY_MEMBERSHIP=false` through the initial deployment. Turning
+on membership before the owner and employee identities are established can
+lock existing clients out. These controls are read from `.env` through the
+Compose service `env_file`; edit that reviewed file rather than using one-off
+shell overrides during a cutover.
+
+1. Generate and persist a stable 64-character hex `BUZZ_RELAY_PRIVATE_KEY`,
+   then uncomment its setting in `.env`. Rotating it later changes the relay
+   identity.
+2. Uncomment `RELAY_OWNER_PUBKEY` in `.env` and set it to the 64-character hex
+   pubkey of a human owner.
+3. Deploy once with both enforcement flags still `false` so the relay can
+   bootstrap the production community and owner without changing current
+   access.
+4. Mint employee invites and test redemption with the Sipher desktop build
+   against `wss://buzz.sipher.gg:8443`.
+5. Set `BUZZ_REQUIRE_AUTH_TOKEN=true`, deploy, and validate employee clients.
+6. Set `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` only after invite, authentication,
+   and client validation succeeds.
+
 ## Roll back
 
 ```bash
