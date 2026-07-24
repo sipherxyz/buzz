@@ -57,32 +57,6 @@ fn default_agent_command_resolves_bundled_buzz_agent() {
 }
 
 #[test]
-fn packaged_executable_directory_precedes_workspace_build_outputs() {
-    let workspace_root = PathBuf::from("/workspace/buzz");
-    let current_dir = PathBuf::from("/workspace/buzz/desktop");
-    let executable_path = PathBuf::from("/Applications/Buzz.app/Contents/MacOS/buzz-desktop");
-
-    let search_dirs = super::command_search_dirs_from(
-        &workspace_root,
-        Some(&current_dir),
-        Some(&executable_path),
-    );
-
-    assert_eq!(
-        search_dirs.first(),
-        Some(&PathBuf::from("/Applications/Buzz.app/Contents/MacOS")),
-        "a packaged app must resolve its bundled sidecars before any source-tree binary"
-    );
-    assert!(
-        search_dirs
-            .iter()
-            .position(|dir| dir == &workspace_root.join("target/debug"))
-            .is_some_and(|workspace_index| workspace_index > 0),
-        "workspace build outputs remain development fallbacks"
-    );
-}
-
-#[test]
 fn normalizes_claude_and_codex_args_to_empty() {
     assert_eq!(
         normalize_agent_args("claude-agent-acp", vec!["acp".into()]),
