@@ -328,7 +328,8 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
             Some("DATABRICKS_MODEL")
         }
         Some("anthropic") => Some("ANTHROPIC_MODEL"),
-        Some("openai") | Some("openai-compat") | Some("ai-gateway") => Some("OPENAI_COMPAT_MODEL"),
+        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        Some("ai-gateway") => Some("OPENAI_MODEL"),
         _ => None,
     };
     let model_present = effective
@@ -371,6 +372,11 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "DATABRICKS_HOST".to_string(),
                 });
             }
+        Some("ai-gateway") => {
+            missing.extend(ai_gateway_probe_requirements(
+                crate::managed_agents::probe_ai_gateway_status(&effective.env),
+            ));
+        }
         _ => {
             // Unknown provider or no provider yet — only the NormalizedField
             // requirement above captures this gap.
@@ -378,6 +384,60 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
     }
 
     missing
+}
+
+fn ai_gateway_probe_requirements(
+    result: Result<
+        crate::managed_agents::AiGatewayStatus,
+        crate::managed_agents::AiGatewayProbeError,
+    >,
+) -> Vec<Requirement> {
+    use crate::managed_agents::{AcpAvailabilityStatus, AiGatewayProbeError, AiGatewayStatus};
+
+    let requirement = match result {
+        Ok(AiGatewayStatus::Ready { .. }) => return vec![],
+        Ok(AiGatewayStatus::LoggedOut { profile, .. }) => Requirement::CliLogin {
+            probe_args: vec![
+                "ai-gateway".to_string(),
+                format!("--{profile}"),
+                "status".to_string(),
+                "--offline".to_string(),
+            ],
+            setup_copy: format!("run `ai-gateway --{profile} login`"),
+            availability: AcpAvailabilityStatus::NotInstalled,
+        },
+        Err(AiGatewayProbeError::MissingExecutable) => Requirement::CliLogin {
+            probe_args: vec![
+                "ai-gateway".to_string(),
+                "--prod".to_string(),
+                "status".to_string(),
+                "--offline".to_string(),
+            ],
+            setup_copy: "install AI Gateway, then run `ai-gateway --prod login`".to_string(),
+            availability: AcpAvailabilityStatus::CliMissing,
+        },
+        Err(error) => {
+            let diagnostic = match error {
+                AiGatewayProbeError::InvalidProfile(message)
+                | AiGatewayProbeError::InvalidOutput(message)
+                | AiGatewayProbeError::CommandFailed(message) => message,
+                AiGatewayProbeError::MissingExecutable => unreachable!(),
+            };
+            Requirement::CliLogin {
+                probe_args: vec![
+                    "ai-gateway".to_string(),
+                    "--prod".to_string(),
+                    "status".to_string(),
+                    "--offline".to_string(),
+                ],
+                setup_copy: format!(
+                    "AI Gateway readiness check failed: {diagnostic}. Fix the local gateway and retry"
+                ),
+                availability: AcpAvailabilityStatus::AdapterMissing,
+            }
+        }
+    };
+    vec![requirement]
 }
 
 /// Requirements for goose (provider + model + provider-specific creds).
@@ -580,6 +640,49 @@ mod tests {
         assert!(result.requirements().contains(&Requirement::EnvKey {
             key: "OPENAI_COMPAT_API_KEY".to_string()
         }));
+    }
+
+    #[test]
+    fn ai_gateway_probe_states_map_to_actionable_readiness() {
+        use crate::managed_agents::{AcpAvailabilityStatus, AiGatewayProbeError, AiGatewayStatus};
+
+        assert!(ai_gateway_probe_requirements(Ok(AiGatewayStatus::Ready {
+            profile: "prod".into(),
+            base_url: "http://127.0.0.1:8080".into(),
+        }))
+        .is_empty());
+
+        let logged_out = ai_gateway_probe_requirements(Ok(AiGatewayStatus::LoggedOut {
+            profile: "prod".into(),
+            base_url: "http://127.0.0.1:8080".into(),
+        }));
+        assert!(matches!(
+            logged_out.as_slice(),
+            [Requirement::CliLogin {
+                availability: AcpAvailabilityStatus::NotInstalled,
+                ..
+            }]
+        ));
+
+        let missing = ai_gateway_probe_requirements(Err(AiGatewayProbeError::MissingExecutable));
+        assert!(matches!(
+            missing.as_slice(),
+            [Requirement::CliLogin {
+                availability: AcpAvailabilityStatus::CliMissing,
+                ..
+            }]
+        ));
+
+        let failed = ai_gateway_probe_requirements(Err(AiGatewayProbeError::InvalidOutput(
+            "unsupported response".into(),
+        )));
+        assert!(matches!(
+            failed.as_slice(),
+            [Requirement::CliLogin {
+                availability: AcpAvailabilityStatus::AdapterMissing,
+                ..
+            }]
+        ));
     }
 
     #[test]

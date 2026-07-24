@@ -90,8 +90,11 @@ pub async fn get_agent_models(
         )
     }; // store lock released — subprocess runs without holding the lock
 
-    let mut merged_env = discovery_env_with_baked_floor(merged_env);
-    crate::managed_agents::apply_ai_gateway_env(&mut merged_env, effective_provider.as_deref())?;
+    if crate::managed_agents::is_ai_gateway_provider(effective_provider.as_deref()) {
+        return discover_ai_gateway_models_response(persisted_model).await;
+    }
+
+    let merged_env = discovery_env_with_baked_floor(merged_env);
     if let Some(models) = discover_openai_compatible_models(
         &state.http_client,
         effective_provider.as_deref(),
@@ -224,9 +227,12 @@ pub async fn discover_agent_models(
         }
     }
     let merged_env = crate::managed_agents::merged_user_env(&derived_env, &input.env_vars);
-    let mut merged_env = discovery_env_with_baked_floor(merged_env);
+    let merged_env = discovery_env_with_baked_floor(merged_env);
     crate::managed_agents::validate_ai_gateway_runtime(input.provider.as_deref(), agent_command)?;
-    crate::managed_agents::apply_ai_gateway_env(&mut merged_env, input.provider.as_deref())?;
+
+    if crate::managed_agents::is_ai_gateway_provider(input.provider.as_deref()) {
+        return discover_ai_gateway_models_response(None).await;
+    }
 
     // Buzz shared compute discovery must not depend on the local OpenAI ingress: that
     // client endpoint is started only after a live target is selected.
@@ -329,8 +335,36 @@ fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
             .map(str::trim)
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("openai" | "openai-compat" | "ai-gateway")
+        Some("openai" | "openai-compat")
     )
+}
+
+fn ai_gateway_models_response(
+    models: Vec<crate::managed_agents::AiGatewayModel>,
+    selected_model: Option<String>,
+) -> AgentModelsResponse {
+    AgentModelsResponse {
+        agent_name: crate::managed_agents::AI_GATEWAY_PROVIDER_ID.to_string(),
+        agent_version: "cli".to_string(),
+        models: models
+            .into_iter()
+            .map(|model| AgentModelInfo {
+                id: model.id.clone(),
+                name: Some(model.id),
+                description: Some(format!("Provider: {}", model.provider)),
+            })
+            .collect(),
+        agent_default_model: None,
+        selected_model,
+        supports_switching: true,
+    }
+}
+
+async fn discover_ai_gateway_models_response(
+    selected_model: Option<String>,
+) -> Result<AgentModelsResponse, String> {
+    let models = crate::managed_agents::discover_ai_gateway_models().await?;
+    Ok(ai_gateway_models_response(models, selected_model))
 }
 
 #[cfg(test)]
@@ -514,11 +548,12 @@ async fn discover_openai_compatible_models(
     } else {
         openai_compatible_models_url_for_discovery(env)
     };
-    let response =
-        crate::managed_agents::ai_gateway_models_request(client, &url, &api_key, provider)
-            .send()
-            .await
-            .map_err(|error| format!("OpenAI model discovery request failed: {error}"))?;
+    let response = client
+        .get(&url)
+        .bearer_auth(&api_key)
+        .send()
+        .await
+        .map_err(|error| format!("OpenAI model discovery request failed: {error}"))?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();

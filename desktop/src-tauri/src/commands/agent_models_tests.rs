@@ -110,41 +110,24 @@ fn openai_compat_model_normalization_preserves_provider_specific_ids() {
 }
 
 #[test]
-fn ai_gateway_is_openai_compatible_and_uses_gateway_display_names() {
-    assert!(is_openai_compatible_provider(Some("ai-gateway")));
+fn ai_gateway_uses_cli_discovery_instead_of_openai_http() {
+    assert!(!is_openai_compatible_provider(Some("ai-gateway")));
 
-    let response: OpenAiModelListResponse = serde_json::from_value(serde_json::json!({
-        "data": [{
-            "id": "anthropic/claude-sonnet-4-6",
-            "display_name": "Claude Sonnet 4.6",
-            "context_length": 200000,
-            "thinking": true
-        }]
-    }))
-    .expect("detailed AI Gateway response");
-    let models = normalize_openai_compatible_models(response, Some("ai-gateway"));
-
-    assert_eq!(models[0].name.as_deref(), Some("Claude Sonnet 4.6"));
-}
-
-#[test]
-fn ai_gateway_model_request_asks_for_full_details() {
-    let request = crate::managed_agents::ai_gateway_models_request(
-        &reqwest::Client::new(),
-        "http://localhost:8317/v1/models",
-        "secret",
-        Some("ai-gateway"),
-    )
-    .build()
-    .expect("request builds");
-
-    assert_eq!(
-        request
-            .headers()
-            .get("X-AI-Gateway-Models-Detail")
-            .and_then(|value| value.to_str().ok()),
-        Some("full")
+    let response = ai_gateway_models_response(
+        vec![crate::managed_agents::AiGatewayModel {
+            id: "claude-sonnet-4-5".to_string(),
+            provider: "anthropic".to_string(),
+        }],
+        Some("saved-model".to_string()),
     );
+
+    assert_eq!(response.agent_name, "ai-gateway");
+    assert_eq!(response.models[0].id, "claude-sonnet-4-5");
+    assert_eq!(
+        response.models[0].description.as_deref(),
+        Some("Provider: anthropic")
+    );
+    assert_eq!(response.selected_model.as_deref(), Some("saved-model"));
 }
 
 #[test]

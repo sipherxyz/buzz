@@ -547,6 +547,63 @@ fn runtime_metadata_env_vars_injects_model_even_with_acp_model_switching() {
     );
 }
 
+#[test]
+fn ai_gateway_wraps_only_buzz_agent_launches() {
+    let wrapped = super::build_acp_agent_launch(
+        "buzz-agent",
+        "/Applications/Buzz.app/Contents/MacOS/buzz-agent".into(),
+        vec!["--verbose".into()],
+        Some("ai-gateway"),
+        Some("/opt/homebrew/bin/ai-gateway".into()),
+        "prod",
+    )
+    .expect("gateway launch");
+    assert_eq!(
+        wrapped.command,
+        std::path::PathBuf::from("/opt/homebrew/bin/ai-gateway")
+    );
+    assert_eq!(
+        wrapped.args,
+        vec![
+            "--prod",
+            "run",
+            "/Applications/Buzz.app/Contents/MacOS/buzz-agent",
+            "--verbose",
+            "--expose",
+            "openai",
+        ]
+    );
+
+    let direct = super::build_acp_agent_launch(
+        "buzz-agent",
+        "/Applications/Buzz.app/Contents/MacOS/buzz-agent".into(),
+        vec![],
+        Some("anthropic"),
+        None,
+        "prod",
+    )
+    .expect("direct launch");
+    assert_eq!(
+        direct.command,
+        std::path::PathBuf::from("/Applications/Buzz.app/Contents/MacOS/buzz-agent")
+    );
+    assert!(direct.args.is_empty());
+
+    let setup_fallback = super::build_acp_agent_launch(
+        "buzz-agent",
+        "/Applications/Buzz.app/Contents/MacOS/buzz-agent".into(),
+        vec![],
+        Some("ai-gateway"),
+        None,
+        "prod",
+    )
+    .expect("missing gateway is handled by setup-listener readiness");
+    assert_eq!(
+        setup_fallback.command,
+        std::path::PathBuf::from("/Applications/Buzz.app/Contents/MacOS/buzz-agent")
+    );
+}
+
 // ── name_matches_known_binary / name_matches_interpreter tests ───────────
 
 #[test]
@@ -554,6 +611,12 @@ fn name_matches_known_binary_rejects_node() {
     // `node` must NOT be in KNOWN_AGENT_BINARIES — adding it there would
     // sweep all node processes on the machine regardless of ownership.
     assert!(!super::name_matches_known_binary("node"));
+}
+
+#[test]
+fn name_matches_known_binary_accepts_ai_gateway_wrapper() {
+    assert!(super::name_matches_known_binary("ai-gateway"));
+    assert!(super::name_matches_known_binary("ai-gateway.exe"));
 }
 
 #[test]
