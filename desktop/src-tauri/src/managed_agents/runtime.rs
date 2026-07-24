@@ -8,14 +8,18 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
-        ManagedAgentRuntimeKey, ManagedAgentSummary,
+        spawn_key_refusal, ManagedAgentPairRuntime, ManagedAgentRecord, ManagedAgentRuntimeKey,
+        ManagedAgentSummary,
     },
     util::now_iso,
 };
 
 mod path;
 pub(in crate::managed_agents) use path::build_augmented_path;
+
+mod ai_gateway_launch;
+mod cli_config;
+pub(crate) use cli_config::configure_runtime_cli;
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
@@ -1593,51 +1597,6 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
-pub(crate) fn configure_runtime_cli(
-    command: &mut std::process::Command,
-    runtime: Option<&KnownAcpRuntime>,
-) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    if runtime.id != "claude" {
-        return;
-    }
-    if let Some(cli_path) = runtime.underlying_cli.and_then(resolve_command) {
-        command.env("CLAUDE_CODE_EXECUTABLE", cli_path);
-    }
-}
-
-pub(crate) fn build_acp_agent_launch(
-    effective_command: &str,
-    resolved_agent_command: std::path::PathBuf,
-    agent_args: Vec<String>,
-    effective_provider: Option<&str>,
-    gateway_command: Option<std::path::PathBuf>,
-    gateway_profile: &str,
-) -> Result<super::AiGatewayLaunchSpec, String> {
-    super::validate_ai_gateway_runtime(effective_provider, effective_command)?;
-    if super::is_ai_gateway_provider(effective_provider) {
-        if let Some(gateway_command) = gateway_command {
-            return super::ai_gateway::build_ai_gateway_launch_spec(
-                gateway_command,
-                gateway_profile,
-                resolved_agent_command,
-                &agent_args,
-            );
-        }
-        // Readiness will put buzz-acp into setup-listener mode when the CLI is
-        // missing. Keep a valid fallback launch contract so the harness can
-        // start and surface the installation action without launching the
-        // unwrapped agent.
-    }
-    Ok(super::AiGatewayLaunchSpec {
-        command: resolved_agent_command,
-        args: agent_args,
-        profile: gateway_profile.to_string(),
-    })
-}
-
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -1712,22 +1671,12 @@ pub fn spawn_agent_child(
         runtime_meta,
         &global,
     );
-    let uses_ai_gateway = super::is_ai_gateway_provider(effective_provider);
-    let gateway_profile = if uses_ai_gateway {
-        super::selected_profile_for_env(&effective_launch_env.env)?
-    } else {
-        "prod".to_string()
-    };
-    let gateway_command = uses_ai_gateway
-        .then(|| super::resolve_command("ai-gateway"))
-        .flatten();
-    let agent_launch = build_acp_agent_launch(
+    let agent_launch = ai_gateway_launch::resolve(
         &effective_command,
         resolved_agent_command,
         agent_args,
         effective_provider,
-        gateway_command,
-        &gateway_profile,
+        &effective_launch_env.env,
     )?;
 
     // The caller supplies the explicit canonical pair relay. This is the only

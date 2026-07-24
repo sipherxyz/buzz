@@ -21,6 +21,13 @@ use crate::{
     util::now_iso,
 };
 
+mod ai_gateway;
+use ai_gateway::discover as discover_ai_gateway_models_response;
+#[cfg(test)]
+use ai_gateway::models_response as ai_gateway_models_response;
+mod provider;
+use provider::is_openai_compatible as is_openai_compatible_provider;
+
 /// Query available models from an agent via `buzz-acp models --json`.
 ///
 /// Spawns a short-lived subprocess (no relay connection needed). The subprocess
@@ -327,44 +334,6 @@ struct OpenAiModelListItem {
     created: Option<i64>,
     #[serde(default)]
     display_name: Option<String>,
-}
-
-fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
-    matches!(
-        provider
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("openai" | "openai-compat")
-    )
-}
-
-fn ai_gateway_models_response(
-    models: Vec<crate::managed_agents::AiGatewayModel>,
-    selected_model: Option<String>,
-) -> AgentModelsResponse {
-    AgentModelsResponse {
-        agent_name: crate::managed_agents::AI_GATEWAY_PROVIDER_ID.to_string(),
-        agent_version: "cli".to_string(),
-        models: models
-            .into_iter()
-            .map(|model| AgentModelInfo {
-                id: model.id.clone(),
-                name: Some(model.id),
-                description: Some(format!("Provider: {}", model.provider)),
-            })
-            .collect(),
-        agent_default_model: None,
-        selected_model,
-        supports_switching: true,
-    }
-}
-
-async fn discover_ai_gateway_models_response(
-    selected_model: Option<String>,
-) -> Result<AgentModelsResponse, String> {
-    let models = crate::managed_agents::discover_ai_gateway_models().await?;
-    Ok(ai_gateway_models_response(models, selected_model))
 }
 
 #[cfg(test)]
