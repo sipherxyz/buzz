@@ -351,6 +351,8 @@ type E2eConfig = {
       model: string | null;
       preferred_runtime?: string | null;
     };
+    /** Build distribution returned by `get_distribution_profile`. */
+    distributionId?: "oss" | "sipher";
     /** Baked build env returned by the display and key-name Tauri commands. */
     bakedBuildEnv?: Array<{
       key: string;
@@ -9125,6 +9127,25 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_distribution_profile": {
+        return activeConfig?.mock?.distributionId === "sipher"
+          ? {
+              id: "sipher",
+              autoJoinDefaultRelay: true,
+              defaultCommunityName: "Sipher",
+              hostedCommunitiesEnabled: false,
+              preferredAgentRuntime: "buzz-agent",
+              preferredLlmProvider: "ai-gateway",
+            }
+          : {
+              id: "oss",
+              autoJoinDefaultRelay: false,
+              defaultCommunityName: null,
+              hostedCommunitiesEnabled: true,
+              preferredAgentRuntime: null,
+              preferredLlmProvider: null,
+            };
+      }
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {
