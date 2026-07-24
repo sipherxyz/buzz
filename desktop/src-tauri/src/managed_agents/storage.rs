@@ -80,6 +80,9 @@ trait KeyStore {
     /// Write `value` and read it back to confirm before the caller strips the
     /// inline copy.
     fn write_and_verify(&self, name: &str, value: &str) -> Result<(), String>;
+    /// Insert all entries in one blob mutation, then verify the entire batch
+    /// with one direct backend read.
+    fn store_all_and_verify(&self, entries: &HashMap<String, String>) -> Result<(), String>;
     /// Insert all entries from `entries` in a single blob mutation.
     fn store_all(&self, entries: &HashMap<String, String>) -> Result<(), String>;
 }
@@ -99,6 +102,14 @@ impl KeyStore for SecretStore {
         match self.load(name)? {
             Some(stored) if stored == value => Ok(()),
             _ => Err("keyring read-back verify failed".to_string()),
+        }
+    }
+    fn store_all_and_verify(&self, entries: &HashMap<String, String>) -> Result<(), String> {
+        SecretStore::store_all(self, entries)?;
+        if self.verify_all_stored_raw(entries)? {
+            Ok(())
+        } else {
+            Err("keyring batch read-back verify failed".to_string())
         }
     }
     fn store_all(&self, entries: &HashMap<String, String>) -> Result<(), String> {
@@ -368,14 +379,33 @@ fn persist_agent_keys(records: &mut [ManagedAgentRecord]) {
 
 /// Testable core of [`persist_agent_keys`], generic over the [`KeyStore`] seam.
 fn persist_agent_keys_with(store: &impl KeyStore, records: &mut [ManagedAgentRecord]) {
-    for record in records.iter_mut() {
-        // Only a verified keyring entry lets us drop the inline copy. Both
-        // other outcomes keep the key inline: `KeptInline` (keyring
-        // unreachable) so it is not lost, and `Nothing` (empty key) because
-        // there is no verified entry to claim. This is a save-local clone, so
-        // callers keep their keys regardless.
-        if migrate_inline_key(store, record) == KeyMigration::Persisted {
-            record.private_key_nsec.clear();
+    let entries: HashMap<String, String> = records
+        .iter()
+        .filter(|record| !record.private_key_nsec.is_empty())
+        .map(|record| {
+            (
+                agent_keyring_name(&record.pubkey),
+                record.private_key_nsec.clone(),
+            )
+        })
+        .collect();
+
+    if entries.is_empty() {
+        return;
+    }
+
+    match store.store_all_and_verify(&entries) {
+        Ok(()) => {
+            for record in records.iter_mut() {
+                if !record.private_key_nsec.is_empty() {
+                    record.private_key_nsec.clear();
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "buzz-desktop: batched agent keyring write failed ({e}), keeping inline keys"
+            );
         }
     }
 }
@@ -886,7 +916,7 @@ mod tests {
                 .insert(name.to_string(), value.to_string());
             Ok(())
         }
-        fn store_all(&self, entries: &HashMap<String, String>) -> Result<(), String> {
+        fn store_all_and_verify(&self, entries: &HashMap<String, String>) -> Result<(), String> {
             if !self.reachable {
                 return Err("keyring backend unreachable".to_string());
             }
@@ -899,6 +929,9 @@ mod tests {
                 stored.insert(k.clone(), v.clone());
             }
             Ok(())
+        }
+        fn store_all(&self, entries: &HashMap<String, String>) -> Result<(), String> {
+            self.store_all_and_verify(entries)
         }
     }
 
@@ -1054,12 +1087,11 @@ mod tests {
     }
 
     #[test]
-    fn persist_agent_keys_writes_once_per_record_with_inline_key() {
-        // A record carrying an inline key (e.g. first save, or keyring-outage
-        // residue) must trigger exactly one write_and_verify per record — and
-        // once persisted the inline copy is cleared so the next save is free.
-        // Records use distinct pubkeys so each maps to a distinct keyring name,
-        // verifying the "per record" behaviour rather than a single-key overwrite.
+    fn persist_agent_keys_batches_inline_keys_into_one_write() {
+        // Multiple inline keys (e.g. first save, or keyring-outage residue)
+        // must be persisted in one blob mutation. On macOS every keyring
+        // mutation can require authorization, so one write per agent causes a
+        // prompt storm.
         let store = FakeKeyStore::reachable();
         let mut records = vec![
             record_with_pubkey_and_key("pubkey-agent-alpha", "nsec1key_a"),
@@ -1070,8 +1102,8 @@ mod tests {
 
         assert_eq!(
             *store.write_count.borrow(),
-            2,
-            "each record with an inline key must trigger exactly one write"
+            1,
+            "all inline keys must be persisted in one blob write"
         );
         // Verify the correct keyring name was used for each agent.
         assert_eq!(

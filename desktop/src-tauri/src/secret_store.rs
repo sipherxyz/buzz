@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// Result of probing the keyring before a migration: distinguishes "reachable
@@ -219,6 +220,13 @@ pub struct SecretStore {
     service: String,
     /// In-memory cache of the deserialized blob. `None` means "not yet loaded".
     cache: Mutex<Option<HashMap<String, String>>>,
+    /// Serializes backend operations so two startup threads cannot open
+    /// overlapping Keychain authorization dialogs.
+    backend_io: Mutex<()>,
+    /// Once the OS reports that secure storage is unavailable or the user
+    /// rejects access, fail fast for the rest of this process. Retrying on
+    /// every UI action creates an unbounded prompt loop.
+    session_unavailable: AtomicBool,
 }
 
 impl SecretStore {
@@ -229,6 +237,8 @@ impl SecretStore {
         SecretStore {
             service: service.into(),
             cache: Mutex::new(None),
+            backend_io: Mutex::new(()),
+            session_unavailable: AtomicBool::new(false),
         }
     }
 
@@ -258,6 +268,9 @@ fn is_keyring_availability_error(error_str: &str) -> bool {
         || lower.contains("org.freedesktop.secrets")
         || lower.contains("platform secure storage")
         || lower.contains("no secret service")
+        || lower.contains("user canceled")
+        || lower.contains("user denied")
+        || lower.contains("interaction with the security server is not allowed")
 }
 
 #[cfg(feature = "system-keyring")]
@@ -315,6 +328,16 @@ impl SecretStore {
             }
         }
 
+        let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
+        // Another thread may have populated the cache while this thread waited
+        // for the backend lock.
+        {
+            let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref map) = *guard {
+                return Ok(Some(map.clone()));
+            }
+        }
+
         let raw = self.read_blob_raw()?;
         let map = match raw {
             None => return Ok(None),
@@ -353,12 +376,16 @@ impl SecretStore {
     /// builds that lack hardened-runtime entitlements).
     #[cfg(feature = "system-keyring")]
     fn read_blob_raw_keyring(&self) -> Result<Option<Vec<u8>>, String> {
+        if self.session_unavailable.load(Ordering::Acquire) {
+            return Err("keyring unavailable for this app session".to_string());
+        }
         let entry =
             keyring_entry(&self.service, BLOB_KEY).map_err(|e| format!("keyring entry: {e}"))?;
         match entry.get_password() {
             Ok(s) => Ok(Some(s.into_bytes())),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) if is_keyring_availability_error(&e.to_string()) => {
+                self.session_unavailable.store(true, Ordering::Release);
                 Err(format!("keyring unavailable: {e}"))
             }
             Err(e) => Err(format!("keyring read: {e}")),
@@ -396,6 +423,8 @@ impl SecretStore {
     where
         F: FnOnce(&mut HashMap<String, String>),
     {
+        let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
+
         // Acquire the interprocess advisory lock first. All Buzz processes
         // using the same service name contend on the same lockfile at
         // /tmp/buzz-keychain-<uid>-<service>.lock (a deterministic per-user
@@ -464,12 +493,20 @@ impl SecretStore {
 
     #[cfg(feature = "system-keyring")]
     fn write_blob_raw_keyring(&self, bytes: &[u8]) -> Result<(), String> {
+        if self.session_unavailable.load(Ordering::Acquire) {
+            return Err("keyring unavailable for this app session".to_string());
+        }
         let value = std::str::from_utf8(bytes).map_err(|e| format!("blob utf8 encode: {e}"))?;
         let entry =
             keyring_entry(&self.service, BLOB_KEY).map_err(|e| format!("keyring entry: {e}"))?;
-        entry
-            .set_password(value)
-            .map_err(|e| format!("keyring write: {e}"))
+        match entry.set_password(value) {
+            Ok(()) => Ok(()),
+            Err(e) if is_keyring_availability_error(&e.to_string()) => {
+                self.session_unavailable.store(true, Ordering::Release);
+                Err(format!("keyring unavailable: {e}"))
+            }
+            Err(e) => Err(format!("keyring write: {e}")),
+        }
     }
 
     /// Probe whether `key` exists and whether the backend is reachable.
@@ -705,6 +742,7 @@ impl SecretStore {
     pub fn verify_stored_raw(&self, key: &str, expected: &str) -> Result<bool, String> {
         #[cfg(feature = "system-keyring")]
         {
+            let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
             let raw = self.read_blob_raw()?;
             match raw {
                 None => Ok(false),
@@ -720,6 +758,36 @@ impl SecretStore {
         #[cfg(not(feature = "system-keyring"))]
         {
             let _ = (key, expected);
+            Err("system-keyring feature disabled".to_string())
+        }
+    }
+
+    /// Verify a batch of entries with one direct read from the OS backend.
+    ///
+    /// This bypasses the in-process cache for the same durability guarantee as
+    /// [`Self::verify_stored_raw`], while avoiding one keychain authorization
+    /// request per managed agent.
+    pub(crate) fn verify_all_stored_raw(
+        &self,
+        expected: &HashMap<String, String>,
+    ) -> Result<bool, String> {
+        #[cfg(feature = "system-keyring")]
+        {
+            let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
+            let raw = self.read_blob_raw()?;
+            let Some(bytes) = raw else {
+                return Ok(false);
+            };
+            let json = String::from_utf8(bytes).map_err(|e| format!("blob utf8: {e}"))?;
+            let map = serde_json::from_str::<HashMap<String, String>>(&json)
+                .map_err(|e| format!("blob json: {e}"))?;
+            Ok(expected
+                .iter()
+                .all(|(key, value)| map.get(key).is_some_and(|stored| stored == value)))
+        }
+        #[cfg(not(feature = "system-keyring"))]
+        {
+            let _ = expected;
             Err("system-keyring feature disabled".to_string())
         }
     }
@@ -756,6 +824,7 @@ impl SecretStore {
     pub fn delete_all_with_legacy_cleanup(&self) -> Result<(), String> {
         #[cfg(feature = "system-keyring")]
         {
+            let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
             let _lock = acquire_blob_lock(&self.service)?;
 
             // Step 1: read current blob keys (best-effort; no entry = empty set).
@@ -848,6 +917,7 @@ impl SecretStore {
     pub fn verify_fully_wiped(&self) -> bool {
         #[cfg(feature = "system-keyring")]
         {
+            let _backend = self.backend_io.lock().unwrap_or_else(|e| e.into_inner());
             // 1. Main blob must be absent.
             match self.read_blob_raw() {
                 Ok(None) => {}
@@ -931,6 +1001,8 @@ mod tests {
             SecretStore {
                 service: service.to_string(),
                 cache: Mutex::new(cache),
+                backend_io: Mutex::new(()),
+                session_unavailable: AtomicBool::new(false),
             }
         }
     }
@@ -955,6 +1027,17 @@ mod tests {
         assert_eq!(
             store.load("identity").unwrap(),
             Some("nsec1test".to_string())
+        );
+    }
+
+    #[test]
+    fn unavailable_session_fails_fast_without_reopening_keychain() {
+        let store = SecretStore::with_cache("buzz-test-session-unavailable", None);
+        store.session_unavailable.store(true, Ordering::Release);
+
+        assert_eq!(
+            store.load_blob().unwrap_err(),
+            "keyring unavailable for this app session"
         );
     }
 
@@ -1167,6 +1250,11 @@ mod tests {
         assert!(is_keyring_availability_error("No Secret Service"));
         assert!(is_keyring_availability_error(
             "Platform secure storage failure"
+        ));
+        assert!(is_keyring_availability_error("User canceled the operation"));
+        assert!(is_keyring_availability_error("User denied access"));
+        assert!(is_keyring_availability_error(
+            "Interaction with the Security Server is not allowed"
         ));
         // A plain "not found" is per-entry, not an availability failure.
         assert!(!is_keyring_availability_error("entry not found"));
