@@ -60,6 +60,12 @@ require_fixed "$workflow" "Assert runner architecture" "host architecture prefli
 require_fixed "$workflow" 'HOST_ARCH=$(uname -m)' "macOS host architecture assertion"
 require_fixed "$workflow" "RuntimeInformation" "Windows host architecture assertion"
 require_fixed "$workflow" "rustc -vV" "Rust host assertion"
+require_fixed "$workflow" "unsigned_test_build:" "unsigned employee test-build input"
+require_fixed "$workflow" "test-macos:" "unsigned macOS test-build job"
+require_fixed "$workflow" "test-windows:" "unsigned Windows test-build job"
+require_fixed "$workflow" "BUZZ_UNSIGNED_TEST_BUILD: \"1\"" "unsigned Tauri build mode"
+require_fixed "$workflow" "_test_unsigned.dmg" "unsigned DMG marker"
+require_fixed "$workflow" "_test_unsigned.exe" "unsigned Windows installer marker"
 
 required_secrets=(
   SIPHER_APPLE_CERTIFICATE
@@ -109,6 +115,12 @@ workflow.fetch("jobs").each do |job_name, job|
       abort "sipher desktop release contract: updater private key leaked into step #{name.inspect}"
     end
   end
+end
+
+%w[test-macos test-windows].each do |job_name|
+  job = workflow.fetch("jobs").fetch(job_name)
+  serialized = job.to_s
+  abort "sipher desktop release contract: #{job_name} must not receive repository secrets" if serialized.include?("secrets.")
 end
 RUBY
 

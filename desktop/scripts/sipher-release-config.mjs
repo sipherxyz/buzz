@@ -94,7 +94,7 @@ export function buildSipherReleaseConfig(env) {
     },
     plugins: {
       updater: unsignedTestBuild
-        ? { endpoints: [] }
+        ? { pubkey: updaterPubkey, endpoints: [] }
         : {
             pubkey: updaterPubkey,
             endpoints: [updaterEndpoint],

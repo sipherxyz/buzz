@@ -9,6 +9,11 @@ on:
       version:
         description: "Semver matching the selected sipher-v tag"
         required: true
+      unsigned_test_build:
+        description: "Build unsigned employee-test installers from the selected ref without publishing a release"
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   # GitHub concurrency groups are repository-scoped. A single constant group
@@ -26,9 +31,218 @@ env:
   BUZZ_UPDATER_ENDPOINT: https://github.com/sipherxyz/buzz/releases/download/sipher-desktop-latest/latest.json
 
 jobs:
+  test-macos:
+    name: macOS employee test build (unsigned)
+    if: github.repository == 'sipherxyz/buzz' && inputs.unsigned_test_build == true
+    runs-on: macos-15
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: aarch64-apple-darwin
+      BUZZ_UNSIGNED_TEST_BUILD: "1"
+      BUZZ_UPDATER_PUBLIC_KEY: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCMjZDRjVDQzUzQzQ2REIKUldUYlJqekZYTThtVzFKQ2txQVJKS0xNbW1zNnllc05KYTlVWGxmdTRGQ29Gb3paOHdGU3o3WlIK
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Assert runner architecture
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "arm64" ]] ||
+            { echo "::error::Expected arm64 runner"; exit 1; }
+          [[ "$(rustc -vV | sed -n 's/^host: //p')" == "$TARGET" ]] ||
+            { echo "::error::Rust host does not match $TARGET"; exit 1; }
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Patch desktop version
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Generate unsigned Sipher test config
+        run: node desktop/scripts/sipher-release-config.mjs
+
+      - name: Build bundled sidecars
+        run: |
+          cargo build --release --target "$TARGET" \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-dev-mcp \
+            -p git-credential-nostr \
+            -p buzz-cli
+          scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Build unsigned macOS employee-test DMG
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          cd desktop
+          pnpm tauri build \
+            --verbose \
+            --target "$TARGET" \
+            --bundles app,dmg \
+            --config src-tauri/tauri.sipher.release.conf.json
+
+      - name: Verify bundled macOS sidecars
+        run: |
+          set -euo pipefail
+          APP=$(find "desktop/src-tauri/target/${TARGET}/release/bundle/macos" \
+            -maxdepth 1 -name '*.app' -type d | head -1)
+          [[ -n "$APP" ]] || { echo "::error::Missing app bundle"; exit 1; }
+          for binary in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+            [[ -x "$APP/Contents/MacOS/$binary" ]] ||
+              { echo "::error::Missing bundled sidecar $binary"; exit 1; }
+          done
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Stage unsigned macOS test installer
+        run: |
+          set -euo pipefail
+          SOURCE_DMG=$(find "desktop/src-tauri/target/${TARGET}/release/bundle/dmg" \
+            -name '*.dmg' -type f | head -1)
+          [[ -f "$SOURCE_DMG" ]] || { echo "::error::Missing DMG"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/test-installers"
+          cp "$SOURCE_DMG" \
+            "$RUNNER_TEMP/test-installers/Buzz_${VERSION}_arm64_test_unsigned.dmg"
+
+      - name: Upload unsigned macOS test installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sipher-test-macos-arm64
+          path: ${{ runner.temp }}/test-installers
+          if-no-files-found: error
+          retention-days: 7
+
+  test-windows:
+    name: Windows employee test build (unsigned)
+    if: github.repository == 'sipherxyz/buzz' && inputs.unsigned_test_build == true
+    runs-on: windows-2025
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: x86_64-pc-windows-msvc
+      BUZZ_UNSIGNED_TEST_BUILD: "1"
+      BUZZ_UPDATER_PUBLIC_KEY: dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCMjZDRjVDQzUzQzQ2REIKUldUYlJqekZYTThtVzFKQ2txQVJKS0xNbW1zNnllc05KYTlVWGxmdTRGQ29Gb3paOHdGU3o3WlIK
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.4.0
+
+      - name: Assert runner architecture
+        shell: pwsh
+        run: |
+          $hostArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          if ($hostArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
+            throw "Expected x64 Windows runner, got $hostArchitecture"
+          }
+          $rustHost = (rustc -vV | Select-String '^host: ').Line.Replace('host: ', '')
+          if ($rustHost -ne $env:TARGET) {
+            throw "Windows Rust host/target mismatch: host=$rustHost target=$env:TARGET"
+          }
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Patch desktop version
+        shell: bash
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Generate unsigned Sipher test config
+        shell: bash
+        run: node desktop/scripts/sipher-release-config.mjs
+
+      - name: Build bundled sidecars
+        shell: bash
+        run: |
+          cargo build --release --target "$TARGET" \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-dev-mcp \
+            -p git-credential-nostr \
+            -p buzz-cli
+          scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Verify staged Windows sidecars
+        shell: pwsh
+        run: |
+          $sidecars = @("buzz-acp", "buzz-agent", "buzz-dev-mcp", "git-credential-nostr", "buzz")
+          foreach ($sidecar in $sidecars) {
+            $path = "desktop/src-tauri/binaries/$sidecar-$env:TARGET.exe"
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "Missing bundled sidecar $path"
+            }
+          }
+
+      - name: Build unsigned Windows employee-test installer
+        shell: bash
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: |
+          cd desktop
+          pnpm tauri build \
+            --verbose \
+            --target "$TARGET" \
+            --bundles nsis \
+            --config src-tauri/tauri.sipher.release.conf.json
+
+      - name: Stage unsigned Windows test installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem `
+            "desktop/src-tauri/target/$env:TARGET/release/bundle/nsis" `
+            -Filter "*.exe" |
+            Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "Missing NSIS installer"
+          }
+          $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+            throw "Expected unsigned test installer, got $($signature.Status)"
+          }
+          $stage = Join-Path $env:RUNNER_TEMP "test-installers"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $installer.FullName `
+            (Join-Path $stage "Buzz_$env:VERSION`_x64_test_unsigned.exe")
+
+      - name: Upload unsigned Windows test installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sipher-test-windows-x64
+          path: ${{ runner.temp }}/test-installers
+          if-no-files-found: error
+          retention-days: 7
+
   setup:
     name: Validate and create draft
-    if: github.repository == 'sipherxyz/buzz'
+    if: github.repository == 'sipherxyz/buzz' && inputs.unsigned_test_build != true
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

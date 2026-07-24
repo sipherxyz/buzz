@@ -60,7 +60,7 @@ test("buildSipherReleaseConfig disables updater artifacts for unsigned test buil
   assert.equal(config.bundle.createUpdaterArtifacts, false);
   assert.equal(config.bundle.macOS.signingIdentity, "-");
   assert.deepEqual(config.plugins.updater.endpoints, []);
-  assert.equal(config.plugins.updater.pubkey, undefined);
+  assert.equal(config.plugins.updater.pubkey, "public-key");
 });
 
 test("buildSipherReleaseConfig rejects missing env vars and non-production urls", async () => {
