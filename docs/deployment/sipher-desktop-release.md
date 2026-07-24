@@ -129,6 +129,29 @@ Do not replace these with floating `*-latest` labels. Update the pinned labels
 deliberately when GitHub deprecates an image, and update the release contract in
 the same change.
 
+## Unsigned employee test installers
+
+Before production signing secrets are available, an operator can create
+short-lived macOS Apple Silicon and Windows x64 installers for employee testing:
+
+1. Open the **Sipher desktop release** workflow and choose **Run workflow**.
+2. Select the branch or commit to test.
+3. Enter a prerelease version such as `0.4.24-test.1`.
+4. Enable **Build unsigned employee-test installers**.
+5. Download `sipher-test-macos-arm64` and `sipher-test-windows-x64` from the
+   completed workflow run.
+
+This mode embeds the production Sipher relay URLs but disables updater
+artifacts and uses a non-secret test updater public key with no endpoints. It
+does not read repository signing secrets, create a GitHub Release, publish
+`latest.json`, or modify the rolling updater release. The artifacts expire
+after seven days and are named with `_test_unsigned`.
+
+macOS users must explicitly allow the unsigned test application through
+Gatekeeper. Windows users will see a SmartScreen warning because the NSIS
+installer has no Authenticode signature. These test installers are not suitable
+for production distribution or automatic updates.
+
 ## Preflight
 
 Before tagging:
@@ -167,10 +190,11 @@ git tag sipher-v0.5.0
 git push origin sipher-v0.5.0
 ```
 
-The tag triggers `.github/workflows/sipher-desktop-release.yml`. A manual
-dispatch is only a retry mechanism: select the existing `sipher-v<VERSION>` tag
-in the GitHub ref picker and enter the same bare version. The workflow rejects
-branches, mismatched versions, moved tags, and caller-selected source refs.
+The tag triggers `.github/workflows/sipher-desktop-release.yml`. For a production
+manual dispatch, leave the unsigned test option disabled: it is only a retry
+mechanism, so select the existing `sipher-v<VERSION>` tag in the GitHub ref
+picker and enter the same bare version. Production mode rejects branches,
+mismatched versions, moved tags, and caller-selected source refs.
 
 The setup job verifies the updater keypair and creates the versioned release as
 a draft. Platform jobs upload only short-lived workflow artifacts. Once both

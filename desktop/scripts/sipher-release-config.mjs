@@ -76,6 +76,8 @@ export function buildSipherReleaseConfig(env) {
     env,
     "BUZZ_WINDOWS_CERTIFICATE_THUMBPRINT",
   );
+  const unsignedTestBuild =
+    readNonEmpty(env, "BUZZ_UNSIGNED_TEST_BUILD") === "1";
 
   assertProductionUpdaterEndpoint(updaterEndpoint);
   assertProductionRelayUrls(relayWsUrl, relayHttpUrl);
@@ -86,14 +88,17 @@ export function buildSipherReleaseConfig(env) {
     bundle: {
       macOS: {
         minimumSystemVersion: "10.15",
+        ...(unsignedTestBuild ? { signingIdentity: "-" } : {}),
       },
-      createUpdaterArtifacts: true,
+      createUpdaterArtifacts: !unsignedTestBuild,
     },
     plugins: {
-      updater: {
-        pubkey: updaterPubkey,
-        endpoints: [updaterEndpoint],
-      },
+      updater: unsignedTestBuild
+        ? { pubkey: updaterPubkey, endpoints: [] }
+        : {
+            pubkey: updaterPubkey,
+            endpoints: [updaterEndpoint],
+          },
     },
   };
 

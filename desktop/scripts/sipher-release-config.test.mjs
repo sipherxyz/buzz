@@ -50,6 +50,19 @@ test("buildSipherReleaseConfig builds the required production updater config", a
   assert.equal(config.bundle.windows, undefined);
 });
 
+test("buildSipherReleaseConfig disables updater artifacts for unsigned test builds", async () => {
+  const { buildSipherReleaseConfig } = await loadModule();
+
+  const config = buildSipherReleaseConfig(
+    validEnv({ BUZZ_UNSIGNED_TEST_BUILD: "1" }),
+  );
+
+  assert.equal(config.bundle.createUpdaterArtifacts, false);
+  assert.equal(config.bundle.macOS.signingIdentity, "-");
+  assert.deepEqual(config.plugins.updater.endpoints, []);
+  assert.equal(config.plugins.updater.pubkey, "public-key");
+});
+
 test("buildSipherReleaseConfig rejects missing env vars and non-production urls", async () => {
   const { buildSipherReleaseConfig } = await loadModule();
 

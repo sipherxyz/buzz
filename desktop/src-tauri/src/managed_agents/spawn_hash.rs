@@ -100,6 +100,13 @@ pub(crate) fn spawn_config_hash(
         .and_then(|r| r.mcp_command)
         .unwrap_or("")
         .hash(&mut hasher);
+    if super::is_ai_gateway_provider(effective.env.get("BUZZ_AGENT_PROVIDER").map(String::as_str)) {
+        "ai-gateway".hash(&mut hasher);
+        super::selected_profile_for_env(&effective.env)
+            .unwrap_or_else(|error| format!("invalid:{error}"))
+            .hash(&mut hasher);
+        ["run", "--expose", "openai"].hash(&mut hasher);
+    }
 
     // Effective env layering (baked floor → runtime metadata → user env).
     // BTreeMap iteration is ordered, so this is deterministic.

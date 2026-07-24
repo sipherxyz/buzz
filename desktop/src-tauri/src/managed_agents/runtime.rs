@@ -8,14 +8,18 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
-        ManagedAgentRuntimeKey, ManagedAgentSummary,
+        spawn_key_refusal, ManagedAgentPairRuntime, ManagedAgentRecord, ManagedAgentRuntimeKey,
+        ManagedAgentSummary,
     },
     util::now_iso,
 };
 
 mod path;
 pub(in crate::managed_agents) use path::build_augmented_path;
+
+mod ai_gateway_launch;
+mod cli_config;
+pub(crate) use cli_config::configure_runtime_cli;
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
@@ -36,6 +40,8 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "buzz_acp",
     "buzz-agent",
     "buzz_agent",
+    "ai-gateway",
+    "ai_gateway",
     "claude-agent-acp",
     "claude_agent_acp",
     "claude-code-acp",
@@ -1591,21 +1597,6 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
-pub(crate) fn configure_runtime_cli(
-    command: &mut std::process::Command,
-    runtime: Option<&KnownAcpRuntime>,
-) {
-    let Some(runtime) = runtime else {
-        return;
-    };
-    if runtime.id != "claude" {
-        return;
-    }
-    if let Some(cli_path) = runtime.underlying_cli.and_then(resolve_command) {
-        command.env("CLAUDE_CODE_EXECUTABLE", cli_path);
-    }
-}
-
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -1650,6 +1641,9 @@ pub fn spawn_agent_child(
     let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
     let effective_command = super::record_agent_command(record, &personas);
     let agent_args = normalize_agent_args(&effective_command, record.agent_args.clone());
+    let runtime_meta = known_acp_runtime(&effective_command);
+    let (effective_model, effective_provider) =
+        crate::managed_agents::resolve_effective_model_provider(record, &personas, &global);
     let resolved_acp_command = resolve_command(&record.acp_command)
         .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
     let effective_mcp_command = known_acp_runtime(&effective_command)
@@ -1670,8 +1664,20 @@ pub fn spawn_agent_child(
     };
     // Resolve agent command to a full path (DMG launches have minimal PATH).
     let resolved_agent_command = resolve_command(&effective_command)
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| effective_command.clone());
+        .unwrap_or_else(|| std::path::PathBuf::from(&effective_command));
+    let effective_launch_env = crate::managed_agents::resolve_effective_agent_env(
+        record,
+        &personas,
+        runtime_meta,
+        &global,
+    );
+    let agent_launch = ai_gateway_launch::resolve(
+        &effective_command,
+        resolved_agent_command,
+        agent_args,
+        effective_provider,
+        &effective_launch_env.env,
+    )?;
 
     // The caller supplies the explicit canonical pair relay. This is the only
     // relay this child may connect to, regardless of the record/workspace default.
@@ -1708,8 +1714,11 @@ pub fn spawn_agent_child(
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
-    command.env("BUZZ_ACP_AGENT_COMMAND", &resolved_agent_command);
-    command.env("BUZZ_ACP_AGENT_ARGS", agent_args.join(","));
+    command.env(
+        "BUZZ_ACP_AGENT_COMMAND",
+        agent_launch.command.display().to_string(),
+    );
+    command.env("BUZZ_ACP_AGENT_ARGS", agent_launch.args.join(","));
     match &resolved_mcp_command {
         Some(mcp_cmd) => {
             command.env("BUZZ_ACP_MCP_COMMAND", mcp_cmd);
@@ -1720,7 +1729,6 @@ pub fn spawn_agent_child(
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
-    let runtime_meta = known_acp_runtime(&effective_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
@@ -1869,9 +1877,6 @@ pub fn spawn_agent_child(
     // resolver: agent → persona → global → None, so a global-default-only agent
     // spawns with the correct provider/model env.
     let effective_prompt = super::spawn_hash::effective_spawn_prompt(record);
-    let (effective_model, effective_provider) =
-        crate::managed_agents::resolve_effective_model_provider(record, &personas, &global);
-
     if let Some(prompt) = &effective_prompt {
         command.env("BUZZ_ACP_SYSTEM_PROMPT", prompt);
     } else {
@@ -1980,15 +1985,6 @@ pub fn spawn_agent_child(
         command.env(key, value);
     }
 
-    // AI Gateway credentials are owned by the locally installed `ai-gateway`
-    // profile, never by Buzz records. Resolve them immediately before spawn
-    // and inject only into the managed buzz-agent process environment.
-    if effective_command == "buzz-agent" && super::is_ai_gateway_provider(effective_provider) {
-        let gateway = super::resolve_ai_gateway_config()?;
-        for (key, value) in gateway.openai_compat_env() {
-            command.env(key, value);
-        }
-    }
     configure_runtime_cli(&mut command, runtime_meta);
 
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible

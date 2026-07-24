@@ -49,28 +49,37 @@ before reading any values because Compose resolves duplicates using the last
 assignment, which would otherwise make the reviewed and deployed configuration
 ambiguous.
 
-## Closed-relay rollout
+## Sipher LAN access policy
 
-Keep `BUZZ_REQUIRE_AUTH_TOKEN=false` and
-`BUZZ_REQUIRE_RELAY_MEMBERSHIP=false` through the initial deployment. Turning
-on membership before the owner and employee identities are established can
-lock existing clients out. These controls are read from `.env` through the
-Compose service `env_file`; edit that reviewed file rather than using one-off
-shell overrides during a cutover.
+The approved Sipher desktop flow uses local Nostr identities and LAN
+self-registration. The production `.env` must therefore keep:
 
-1. Generate and persist a stable 64-character hex `BUZZ_RELAY_PRIVATE_KEY`,
-   then uncomment its setting in `.env`. Rotating it later changes the relay
-   identity.
-2. Uncomment `RELAY_OWNER_PUBKEY` in `.env` and set it to the 64-character hex
-   pubkey of a human owner.
-3. Deploy once with both enforcement flags still `false` so the relay can
-   bootstrap the production community and owner without changing current
-   access.
-4. Mint employee invites and test redemption with the Sipher desktop build
-   against `wss://buzz.sipher.gg:8443`.
-5. Set `BUZZ_REQUIRE_AUTH_TOKEN=true`, deploy, and validate employee clients.
-6. Set `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` only after invite, authentication,
-   and client validation succeeds.
+```env
+BUZZ_REQUIRE_AUTH_TOKEN=false
+BUZZ_REQUIRE_RELAY_MEMBERSHIP=false
+```
+
+Preflight rejects any other values and emits a warning recording the accepted
+trust boundary. Anyone who can reach `buzz.sipher.gg:8443` can create an
+identity and publish events, so router, firewall, VLAN and/or VPN policy must
+limit the port to trusted employee devices. DNS alone is not an access control.
+
+`buzz.sipher.gg:8443` is the Sipher community relay, not a username/password
+account service. The Sipher desktop creates its identity locally and joins this
+pre-provisioned community. Builderlab is not involved.
+
+Each employee machine must separately install AI Gateway and complete:
+
+```bash
+ai-gateway --prod login
+ai-gateway --prod status --offline
+ai-gateway --prod models
+```
+
+Buzz invokes these CLI commands and launches `buzz-agent` through AI Gateway.
+Buzz neither reads nor stores the gateway credential. Advanced users can still
+add another relay or select a different agent engine/LLM connection in
+Settings.
 
 ## Roll back
 

@@ -138,6 +138,25 @@ fn record_env_var_edit_changes_hash() {
 }
 
 #[test]
+fn ai_gateway_profile_changes_spawn_hash() {
+    let mut prod = record();
+    prod.agent_command = "buzz-agent".into();
+    prod.provider = Some("ai-gateway".into());
+    prod.model = Some("gpt-5.4".into());
+    prod.env_vars
+        .insert("AI_GATEWAY_PROFILE".into(), "prod".into());
+
+    let mut dev = prod.clone();
+    dev.env_vars
+        .insert("AI_GATEWAY_PROFILE".into(), "dev".into());
+
+    assert_ne!(
+        spawn_config_hash(&prod, &[], &[], "wss://ws.example", &Default::default()),
+        spawn_config_hash(&dev, &[], &[], "wss://ws.example", &Default::default())
+    );
+}
+
+#[test]
 fn record_prompt_edit_changes_hash() {
     let rec = record();
     let mut edited = record();

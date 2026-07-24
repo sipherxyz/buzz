@@ -15,6 +15,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_RELAY_RECONNECT_CMD");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_OBSERVER_ARCHIVE_DEFAULT");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_METRIC_ARCHIVE_DEFAULT");
+    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_DISTRIBUTION");
     println!("cargo:rustc-check-cfg=cfg(buzz_updater_enabled)");
 
     if let Ok(relay_url) = std::env::var("BUZZ_RELAY_URL") {
@@ -23,6 +24,10 @@ fn main() {
 
     if let Ok(relay_http) = std::env::var("BUZZ_RELAY_HTTP") {
         println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_RELAY_HTTP={relay_http}");
+    }
+
+    if let Ok(distribution) = std::env::var("BUZZ_BUILD_DISTRIBUTION") {
+        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_DISTRIBUTION={distribution}");
     }
 
     if let Ok(provider) = std::env::var("BUZZ_BUILD_BUZZ_AGENT_PROVIDER") {
