@@ -88,6 +88,7 @@ export function buildSipherReleaseConfig(env) {
     bundle: {
       macOS: {
         minimumSystemVersion: "10.15",
+        ...(unsignedTestBuild ? { signingIdentity: "-" } : {}),
       },
       createUpdaterArtifacts: !unsignedTestBuild,
     },
