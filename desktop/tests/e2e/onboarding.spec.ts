@@ -1153,6 +1153,37 @@ test("first-community direct join reaches profile", async ({ page }) => {
     .toEqual({ communityCount: 1, transactionMatchesOnlyCommunity: true });
 });
 
+test("first-run join uses the build default relay for bare invite codes", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(page, undefined, {
+    relayWsUrl: "wss://onboarding.communities.buzz.xyz",
+    skipOnboardingSeed: true,
+    skipCommunitySeed: true,
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page.getByTestId("invite-redeem-input").fill("abc123");
+  await expect(page.getByLabel("Relay URL")).toHaveValue(
+    "wss://onboarding.communities.buzz.xyz",
+  );
+  await expect(
+    page.getByRole("checkbox", { name: "I am 18 years of age or older." }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Terms of Service" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("invite-redeem-submit")).toBeDisabled();
+});
+
 test("first-community direct join cancel returns to request access", async ({
   page,
 }) => {

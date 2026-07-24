@@ -45,15 +45,18 @@ git -C "$tmp" tag relay-v2.0.0
 
 if grep -q 'inputs\.ref' \
   "$repo_root/.github/workflows/release.yml" \
-  "$repo_root/.github/workflows/docker.yml"; then
+  "$repo_root/.github/workflows/docker.yml" \
+  "$repo_root/.github/workflows/sipher-desktop-release.yml"; then
   echo "publisher workflow still accepts a caller-selected source ref" >&2
   exit 1
 fi
 
 grep -q 'verify-release-ref\.sh' "$repo_root/.github/workflows/release.yml"
 grep -q 'verify-release-ref\.sh' "$repo_root/.github/workflows/docker.yml"
+grep -q 'verify-release-ref\.sh sipher-v' "$repo_root/.github/workflows/sipher-desktop-release.yml"
 grep -q 'test-release-ref-contract\.sh' "$repo_root/.github/workflows/ci.yml"
 "$repo_root/scripts/test-signed-canary-contract.sh"
+"$repo_root/scripts/test-sipher-desktop-release-contract.sh"
 auto_tag="$repo_root/.github/workflows/auto-tag-on-release-pr-merge.yml"
 grep -q 'actions/create-github-app-token@' "$auto_tag"
 grep -q 'client-id:.*vars\.BUZZ_RELEASE_TAGGER_CLIENT_ID' "$auto_tag"

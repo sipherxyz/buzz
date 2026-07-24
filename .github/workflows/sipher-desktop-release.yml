@@ -1,0 +1,781 @@
+name: Sipher desktop release
+
+on:
+  push:
+    tags:
+      - "sipher-v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver matching the selected sipher-v tag"
+        required: true
+
+concurrency:
+  # GitHub concurrency groups are repository-scoped. A single constant group
+  # serializes every Sipher tag and manual retry before rolling release mutation.
+  group: sipher-desktop-release
+  queue: max
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  BUZZ_RELAY_URL: wss://buzz.sipher.gg:8443
+  BUZZ_RELAY_HTTP: https://buzz.sipher.gg:8443
+  BUZZ_UPDATER_ENDPOINT: https://github.com/sipherxyz/buzz/releases/download/sipher-desktop-latest/latest.json
+
+jobs:
+  setup:
+    name: Validate and create draft
+    if: github.repository == 'sipherxyz/buzz'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_was_draft: ${{ steps.release.outputs.release_was_draft }}
+    steps:
+      - name: Determine version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#sipher-v}"
+          else
+            VERSION="$INPUT_VERSION"
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid Sipher desktop version '$VERSION'"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate required Sipher release secrets
+        env:
+          SIPHER_APPLE_CERTIFICATE: ${{ secrets.SIPHER_APPLE_CERTIFICATE }}
+          SIPHER_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.SIPHER_APPLE_CERTIFICATE_PASSWORD }}
+          SIPHER_APPLE_SIGNING_IDENTITY: ${{ secrets.SIPHER_APPLE_SIGNING_IDENTITY }}
+          SIPHER_APPLE_ID: ${{ secrets.SIPHER_APPLE_ID }}
+          SIPHER_APPLE_PASSWORD: ${{ secrets.SIPHER_APPLE_PASSWORD }}
+          SIPHER_APPLE_TEAM_ID: ${{ secrets.SIPHER_APPLE_TEAM_ID }}
+          SIPHER_KEYCHAIN_PASSWORD: ${{ secrets.SIPHER_KEYCHAIN_PASSWORD }}
+          SIPHER_UPDATER_PUBLIC_KEY: ${{ secrets.SIPHER_UPDATER_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          required=(
+            SIPHER_APPLE_CERTIFICATE
+            SIPHER_APPLE_CERTIFICATE_PASSWORD
+            SIPHER_APPLE_SIGNING_IDENTITY
+            SIPHER_APPLE_ID
+            SIPHER_APPLE_PASSWORD
+            SIPHER_APPLE_TEAM_ID
+            SIPHER_KEYCHAIN_PASSWORD
+            SIPHER_UPDATER_PUBLIC_KEY
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if ((${#missing[@]} > 0)); then
+            echo "::error::Missing required Sipher release secret(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        id: source
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          scripts/verify-release-ref.sh sipher-v "$VERSION"
+          echo "source_sha=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_OUTPUT"
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Install updater verification tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes minisign
+
+      - name: Verify Sipher updater keypair
+        env:
+          SIPHER_UPDATER_PUBLIC_KEY: ${{ secrets.SIPHER_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]] ||
+            { echo "::error::Missing SIPHER_UPDATER_PRIVATE_KEY"; exit 1; }
+          [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]] ||
+            { echo "::error::Missing SIPHER_UPDATER_PRIVATE_KEY_PASSWORD"; exit 1; }
+
+          SMOKE_FILE="$RUNNER_TEMP/sipher-updater-key-smoke"
+          PUBLIC_KEY_FILE="$RUNNER_TEMP/sipher-updater-public.key"
+          SIGNATURE_FILE="$RUNNER_TEMP/sipher-updater-key-smoke.minisig"
+          printf 'sipher updater keypair smoke\n' > "$SMOKE_FILE"
+          (cd desktop && pnpm tauri signer sign "$SMOKE_FILE")
+          printf '%s' "$SIPHER_UPDATER_PUBLIC_KEY" | base64 --decode > "$PUBLIC_KEY_FILE"
+          base64 --decode "$SMOKE_FILE.sig" > "$SIGNATURE_FILE"
+          minisign -Vm "$SMOKE_FILE" -p "$PUBLIC_KEY_FILE" -x "$SIGNATURE_FILE"
+
+      - name: Create draft versioned release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="sipher-v${VERSION}"
+          SOURCE_SHA=$(git rev-parse 'HEAD^{commit}')
+          find_release() {
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${TAG}\") | [.id, .draft] | @tsv" |
+              head -1
+          }
+
+          RELEASE=$(find_release)
+          if [[ -z "$RELEASE" ]]; then
+            gh release create "$TAG" \
+              --draft \
+              --target "$SOURCE_SHA" \
+              --title "Buzz Desktop ${TAG}" \
+              --notes "Sipher-managed Buzz Desktop ${VERSION}"
+            RELEASE=$(find_release)
+          fi
+          [[ -n "$RELEASE" ]] ||
+            { echo "::error::Unable to resolve draft release for $TAG"; exit 1; }
+          read -r RELEASE_ID RELEASE_DRAFT <<< "$RELEASE"
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "release_was_draft=$RELEASE_DRAFT" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS (${{ matrix.platform }})
+    if: github.repository == 'sipherxyz/buzz'
+    needs: setup
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            platform: darwin-aarch64
+            artifact_arch: arm64
+            runner: macos-15
+            host_arch: arm64
+          - target: x86_64-apple-darwin
+            platform: darwin-x86_64
+            artifact_arch: x64
+            runner: macos-15-intel
+            host_arch: x86_64
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      PLATFORM: ${{ matrix.platform }}
+      BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.SIPHER_UPDATER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh sipher-v "$VERSION"
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Assert runner architecture
+        env:
+          EXPECTED_HOST_ARCH: ${{ matrix.host_arch }}
+        run: |
+          set -euo pipefail
+          HOST_ARCH=$(uname -m)
+          RUST_HOST=$(rustc -vV | sed -n 's/^host: //p')
+          [[ "$HOST_ARCH" == "$EXPECTED_HOST_ARCH" ]] ||
+            { echo "::error::Expected $EXPECTED_HOST_ARCH runner, got $HOST_ARCH"; exit 1; }
+          [[ "$RUST_HOST" == "${EXPECTED_HOST_ARCH}-apple-darwin" ]] ||
+            { echo "::error::Unexpected Rust host $RUST_HOST"; exit 1; }
+          [[ "$TARGET" == "${EXPECTED_HOST_ARCH}-apple-darwin" ]] ||
+            { echo "::error::Target $TARGET does not match runner architecture"; exit 1; }
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Add Rust target
+        run: rustup target add "$TARGET"
+
+      - name: Patch desktop version
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Generate Sipher release config
+        run: node desktop/scripts/sipher-release-config.mjs
+
+      - name: Build five sidecars
+        run: |
+          cargo build --release --target "$TARGET" \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-dev-mcp \
+            -p git-credential-nostr \
+            -p buzz-cli
+          scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Import Sipher Developer ID into temporary keychain
+        env:
+          SIPHER_APPLE_CERTIFICATE: ${{ secrets.SIPHER_APPLE_CERTIFICATE }}
+          SIPHER_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.SIPHER_APPLE_CERTIFICATE_PASSWORD }}
+          SIPHER_APPLE_SIGNING_IDENTITY: ${{ secrets.SIPHER_APPLE_SIGNING_IDENTITY }}
+          SIPHER_KEYCHAIN_PASSWORD: ${{ secrets.SIPHER_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/sipher-signing.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/sipher-developer-id.p12"
+          printf '%s' "$SIPHER_APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$SIPHER_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$SIPHER_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$SIPHER_APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$SIPHER_KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
+            grep -F "$SIPHER_APPLE_SIGNING_IDENTITY"
+
+      - name: Build, sign, and notarize macOS bundles
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.SIPHER_APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.SIPHER_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.SIPHER_APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.SIPHER_APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY_PASSWORD }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          cd desktop
+          pnpm tauri build \
+            --verbose \
+            --target "$TARGET" \
+            --bundles app,dmg \
+            --config src-tauri/tauri.sipher.release.conf.json
+
+      - name: Remove temporary keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/sipher-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/sipher-developer-id.p12"
+
+      - name: Verify signed and notarized app
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
+          APP=$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' -type d | head -1)
+          DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
+          [[ -n "$APP" && -n "$DMG" ]] || {
+            echo "::error::Missing signed macOS app or DMG in $BUNDLE_DIR"
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute --verbose=4 "$APP"
+          desktop/scripts/verify-macos-entitlements.sh "$APP"
+          xcrun stapler validate "$DMG"
+
+      - name: Stage macOS release artifacts
+        id: artifacts
+        env:
+          ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
+          SOURCE_DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
+          SOURCE_ARCHIVE=$(find "$BUNDLE_DIR/macos" -name '*.tar.gz' -type f | head -1)
+          SOURCE_SIG="${SOURCE_ARCHIVE}.sig"
+          [[ -f "$SOURCE_DMG" && -f "$SOURCE_ARCHIVE" && -f "$SOURCE_SIG" ]] || {
+            echo "::error::Missing macOS release or updater artifact"
+            exit 1
+          }
+
+          STAGE="$RUNNER_TEMP/release-assets"
+          mkdir -p "$STAGE"
+          DMG="$STAGE/Buzz_${VERSION}_${ARTIFACT_ARCH}.dmg"
+          ARCHIVE="$STAGE/Buzz_${VERSION}_${ARTIFACT_ARCH}.app.tar.gz"
+          SIG="${ARCHIVE}.sig"
+          cp "$SOURCE_DMG" "$DMG"
+          cp "$SOURCE_ARCHIVE" "$ARCHIVE"
+          cp "$SOURCE_SIG" "$SIG"
+          printf '%s' "$(basename "$ARCHIVE")" > "$STAGE/${PLATFORM}.archive"
+          cp "$SIG" "$STAGE/${PLATFORM}.sig"
+
+      - name: Upload verified macOS release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sipher-release-macos-${{ matrix.platform }}
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+          retention-days: 1
+
+  windows:
+    name: Windows (optional)
+    if: github.repository == 'sipherxyz/buzz'
+    needs: setup
+    runs-on: windows-2025
+    timeout-minutes: 60
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      TARGET: x86_64-pc-windows-msvc
+      PLATFORM: windows-x86_64
+      BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.SIPHER_UPDATER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        shell: bash
+        run: scripts/verify-release-ref.sh sipher-v "$VERSION"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Assert runner architecture
+        shell: pwsh
+        run: |
+          $hostArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          if ($hostArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
+            throw "Expected x64 Windows runner, got $hostArchitecture"
+          }
+          $rustHost = (rustc -vV | Select-String '^host: ').Line.Replace('host: ', '')
+          if ($rustHost -ne 'x86_64-pc-windows-msvc' -or $env:TARGET -ne $rustHost) {
+            throw "Windows Rust host/target mismatch: host=$rustHost target=$env:TARGET"
+          }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.14.1
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.4.0
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Patch desktop version
+        shell: bash
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Import optional Windows signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIPHER_WINDOWS_CERTIFICATE: ${{ secrets.SIPHER_WINDOWS_CERTIFICATE }}
+          SIPHER_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.SIPHER_WINDOWS_CERTIFICATE_PASSWORD }}
+          SIPHER_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.SIPHER_WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIPHER_WINDOWS_CERTIFICATE)) {
+            "signed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          if (
+            [string]::IsNullOrWhiteSpace($env:SIPHER_WINDOWS_CERTIFICATE_PASSWORD) -or
+            [string]::IsNullOrWhiteSpace($env:SIPHER_WINDOWS_CERTIFICATE_THUMBPRINT)
+          ) {
+            throw "Windows certificate password and thumbprint are required when SIPHER_WINDOWS_CERTIFICATE is set"
+          }
+
+          $bytes = [Convert]::FromBase64String($env:SIPHER_WINDOWS_CERTIFICATE)
+          $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet
+          $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $bytes,
+            $env:SIPHER_WINDOWS_CERTIFICATE_PASSWORD,
+            $flags
+          )
+          $actual = $certificate.Thumbprint.Replace(" ", "").ToUpperInvariant()
+          $expected = $env:SIPHER_WINDOWS_CERTIFICATE_THUMBPRINT.Replace(" ", "").ToUpperInvariant()
+          if ($actual -ne $expected) {
+            throw "Imported Windows certificate thumbprint does not match SIPHER_WINDOWS_CERTIFICATE_THUMBPRINT"
+          }
+
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            "My",
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          $store.Add($certificate)
+          $store.Close()
+          "signed=true" >> $env:GITHUB_OUTPUT
+          "thumbprint=$actual" >> $env:GITHUB_OUTPUT
+
+      - name: Generate Sipher release config
+        shell: bash
+        env:
+          BUZZ_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+        run: node desktop/scripts/sipher-release-config.mjs
+
+      - name: Build five sidecars
+        shell: bash
+        run: |
+          cargo build --release --target "$TARGET" \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-dev-mcp \
+            -p git-credential-nostr \
+            -p buzz-cli
+          scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Build Windows NSIS installer
+        shell: bash
+        run: |
+          cd desktop
+          pnpm tauri build \
+            --verbose \
+            --target "$TARGET" \
+            --bundles nsis \
+            --config src-tauri/tauri.sipher.release.conf.json
+        env:
+          BUZZ_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.SIPHER_UPDATER_PRIVATE_KEY_PASSWORD }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Stage Windows release artifact
+        id: artifacts
+        shell: bash
+        env:
+          WINDOWS_SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/nsis"
+          SOURCE_EXE=$(find "$BUNDLE_DIR" -name '*.exe' -type f | head -1)
+          SOURCE_SIG="${SOURCE_EXE}.sig"
+          [[ -f "$SOURCE_EXE" && -f "$SOURCE_SIG" ]] || {
+            echo "::error::Missing Windows installer or updater signature"
+            exit 1
+          }
+
+          STAGE="$RUNNER_TEMP/release-assets"
+          mkdir -p "$STAGE"
+          if [[ "$WINDOWS_SIGNED" == "true" ]]; then
+            EXE="$STAGE/Buzz_${VERSION}_x64-setup.exe"
+          else
+            EXE="$STAGE/Buzz_${VERSION}_x64-setup_unsigned.exe"
+          fi
+          SIG="${EXE}.sig"
+          cp "$SOURCE_EXE" "$EXE"
+          cp "$SOURCE_SIG" "$SIG"
+          echo "exe=$EXE" >> "$GITHUB_OUTPUT"
+          if [[ "$WINDOWS_SIGNED" == "true" ]]; then
+            printf '%s' "$(basename "$EXE")" > "$STAGE/${PLATFORM}.archive"
+            cp "$SIG" "$STAGE/${PLATFORM}.sig"
+          fi
+
+      - name: Verify signed Windows installer
+        if: steps.signing.outputs.signed == 'true'
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ steps.artifacts.outputs.exe }}
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath $env:EXE_PATH
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Windows installer Authenticode verification failed: $($signature.StatusMessage)"
+          }
+
+      - name: Upload verified Windows release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sipher-release-windows-x86_64
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+          retention-days: 1
+
+  promote:
+    name: Publish verified versioned release
+    if: |
+      always() &&
+      github.repository == 'sipherxyz/buzz' &&
+      needs.setup.result == 'success' &&
+      needs.macos.result == 'success'
+    needs: [setup, macos, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      RELEASE_ID: ${{ needs.setup.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh sipher-v "$VERSION"
+
+      - name: Download verified macOS release artifacts and optional Windows preview
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sipher-release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Upload verified installers to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t DMGS < <(find release-assets -maxdepth 1 -name '*.dmg' -type f | sort)
+          ((${#DMGS[@]} == 2)) ||
+            { echo "::error::Expected two verified DMGs, found ${#DMGS[@]}"; exit 1; }
+          mapfile -t INSTALLERS < <(find release-assets -maxdepth 1 -name '*.exe' -type f | sort)
+          ((${#INSTALLERS[@]} <= 1)) ||
+            { echo "::error::Expected at most one verified Windows installer"; exit 1; }
+
+          upload_asset() {
+            local file=$1
+            local name
+            name=$(basename "$file")
+            local existing
+            existing=$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+              --jq ".[] | select(.name == \"${name}\") | .id" |
+              head -1)
+            if [[ -n "$existing" ]]; then
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${existing}"
+            fi
+            curl --fail --show-error --location \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Content-Type: application/octet-stream" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --data-binary "@${file}" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${name}" \
+              >/dev/null
+          }
+
+          for dmg in "${DMGS[@]}"; do
+            upload_asset "$dmg"
+          done
+          for installer in "${INSTALLERS[@]}"; do
+            upload_asset "$installer"
+          done
+
+      - name: Publish verified versioned release
+        if: needs.setup.outputs.release_was_draft == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            >/dev/null
+
+  manifest:
+    name: Publish monotonic updater release
+    if: |
+      always() &&
+      github.repository == 'sipherxyz/buzz' &&
+      needs.setup.result == 'success' &&
+      needs.macos.result == 'success' &&
+      needs.promote.result == 'success'
+    needs: [setup, macos, windows, promote]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh sipher-v "$VERSION"
+
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sipher-release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Generate signed-platform latest.json
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/sipherxyz/buzz/releases/download/sipher-desktop-latest"
+          [[ -f release-assets/darwin-aarch64.archive ]] ||
+            { echo "::error::Missing Apple Silicon updater metadata"; exit 1; }
+          [[ -f release-assets/darwin-x86_64.archive ]] ||
+            { echo "::error::Missing Intel macOS updater metadata"; exit 1; }
+
+          triples=()
+          for archive_file in release-assets/*.archive; do
+            platform=$(basename "$archive_file" .archive)
+            archive_name=$(cat "$archive_file")
+            sig_file="release-assets/${platform}.sig"
+            [[ -n "$archive_name" && -s "$sig_file" ]] ||
+              { echo "::error::Incomplete updater metadata for $platform"; exit 1; }
+            triples+=("${platform}:${sig_file}:${BASE}/${archive_name}")
+          done
+          bash desktop/scripts/generate-oss-latest-json.sh \
+            "$VERSION" \
+            "${triples[@]}" > latest.json
+          jq -e '.platforms["darwin-aarch64"] and .platforms["darwin-x86_64"]' latest.json
+
+      - name: Compare rolling updater version
+        id: monotonic
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CURRENT_DIR="$RUNNER_TEMP/current-updater"
+          mkdir -p "$CURRENT_DIR"
+          if ! gh release view sipher-desktop-latest >/dev/null 2>&1; then
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh release download sipher-desktop-latest \
+            --pattern latest.json \
+            --dir "$CURRENT_DIR" \
+            --clobber; then
+            echo "::error::Existing rolling release has no readable latest.json"
+            exit 1
+          fi
+          CURRENT_VERSION=$(jq -er '.version' "$CURRENT_DIR/latest.json")
+
+          set +e
+          node - "$CURRENT_VERSION" "$VERSION" <<'NODE'
+          const [current, incoming] = process.argv.slice(2);
+          const pattern = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+          function parse(version) {
+            const match = pattern.exec(version);
+            if (!match) throw new Error(`invalid semver: ${version}`);
+            return {
+              core: match.slice(1, 4).map(Number),
+              prerelease: match[4]?.split(".") ?? [],
+            };
+          }
+          function compareIdentifier(left, right) {
+            const leftNumeric = /^\d+$/.test(left);
+            const rightNumeric = /^\d+$/.test(right);
+            if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+            if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+            return left.localeCompare(right);
+          }
+          function compareVersions(leftVersion, rightVersion) {
+            const left = parse(leftVersion);
+            const right = parse(rightVersion);
+            for (let index = 0; index < 3; index += 1) {
+              if (left.core[index] !== right.core[index]) {
+                return left.core[index] - right.core[index];
+              }
+            }
+            if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+              return right.prerelease.length - left.prerelease.length;
+            }
+            const length = Math.max(left.prerelease.length, right.prerelease.length);
+            for (let index = 0; index < length; index += 1) {
+              if (left.prerelease[index] === undefined) return -1;
+              if (right.prerelease[index] === undefined) return 1;
+              const compared = compareIdentifier(
+                left.prerelease[index],
+                right.prerelease[index],
+              );
+              if (compared !== 0) return compared;
+            }
+            return 0;
+          }
+          if (compareVersions(incoming, current) <= 0) {
+            console.error(
+              `incoming version is not newer than rolling latest: ${incoming} <= ${current}`,
+            );
+            process.exit(10);
+          }
+          NODE
+          COMPARE_STATUS=$?
+          set -e
+          case "$COMPARE_STATUS" in
+            0)
+              echo "promote=true" >> "$GITHUB_OUTPUT"
+              ;;
+            10)
+              echo "::notice::Skipping rolling updater promotion for non-newer version $VERSION"
+              echo "promote=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$COMPARE_STATUS"
+              ;;
+          esac
+
+      - name: Upload updater-ready artifacts and latest.json
+        if: steps.monotonic.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          FILES=()
+          for archive_file in release-assets/*.archive; do
+            archive_name=$(cat "$archive_file")
+            archive_path="release-assets/${archive_name}"
+            signature_path="${archive_path}.sig"
+            [[ -f "$archive_path" && -f "$signature_path" ]] ||
+              { echo "::error::Missing updater payload for $archive_name"; exit 1; }
+            FILES+=("$archive_path" "$signature_path")
+          done
+
+          if gh release view sipher-desktop-latest >/dev/null 2>&1; then
+            gh release upload sipher-desktop-latest "${FILES[@]}" --clobber
+            # Publish latest.json last so clients never observe missing payloads.
+            gh release upload sipher-desktop-latest latest.json --clobber
+          else
+            gh release create sipher-desktop-latest \
+              --prerelease \
+              --title "Sipher Buzz Desktop Auto-Update" \
+              --notes "Rolling release for signed Sipher desktop updater artifacts." \
+              "${FILES[@]}" \
+              latest.json
+          fi

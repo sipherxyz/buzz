@@ -25,6 +25,7 @@ type WelcomeSetupPage = "welcome" | "existing" | "join" | "member" | "owned";
 type WelcomeTransitionMode = "initial" | OnboardingTransitionDirection;
 
 type WelcomeSetupProps = {
+  defaultRelayUrl?: string;
   initialPage?: WelcomeSetupPage;
   initialTransitionMode?: WelcomeTransitionMode;
   onBack: () => void;
@@ -34,6 +35,7 @@ const COMMUNITY_OPTION_CARD_CLASS =
   "w-full max-w-[320px] items-center px-6 py-4 text-center text-sm font-normal leading-6 text-foreground [--buzz-card-textured-min-height:88px] transition-[filter] duration-150 ease-out hover:brightness-[0.98] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/35";
 
 export function WelcomeSetup({
+  defaultRelayUrl,
   initialPage = "welcome",
   initialTransitionMode = "initial",
   onBack,
@@ -259,6 +261,7 @@ export function WelcomeSetup({
               </div>
               <div className="flex w-full flex-1 flex-col items-center justify-center gap-16">
                 <InviteRedeemForm
+                  defaultRelayUrl={defaultRelayUrl}
                   error={null}
                   isRedeeming={false}
                   onCancel={() =>
