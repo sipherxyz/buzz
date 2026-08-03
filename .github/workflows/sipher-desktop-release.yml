@@ -74,6 +74,7 @@ jobs:
           cargo build --release --target "$TARGET" \
             -p buzz-acp \
             -p buzz-agent \
+            -p buzz-backend-kubernetes \
             -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p buzz-cli
@@ -99,7 +100,7 @@ jobs:
           APP=$(find "desktop/src-tauri/target/${TARGET}/release/bundle/macos" \
             -maxdepth 1 -name '*.app' -type d | head -1)
           [[ -n "$APP" ]] || { echo "::error::Missing app bundle"; exit 1; }
-          for binary in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
+          for binary in buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr buzz; do
             [[ -x "$APP/Contents/MacOS/$binary" ]] ||
               { echo "::error::Missing bundled sidecar $binary"; exit 1; }
           done
@@ -443,11 +444,12 @@ jobs:
       - name: Generate Sipher release config
         run: node desktop/scripts/sipher-release-config.mjs
 
-      - name: Build five sidecars
+      - name: Build six sidecars
         run: |
           cargo build --release --target "$TARGET" \
             -p buzz-acp \
             -p buzz-agent \
+            -p buzz-backend-kubernetes \
             -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p buzz-cli
