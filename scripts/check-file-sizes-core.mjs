@@ -31,6 +31,49 @@ export function evaluateFileSize({ baseLines, candidateLines, maxLines }) {
   return { limit, violates: candidateLines > limit };
 }
 
+function commitParents(repoRoot, ref) {
+  return git(["show", "-s", "--format=%P", ref], repoRoot)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function validatedUpstreamSyncBase(repoRoot, ref) {
+  const parents = commitParents(repoRoot, ref);
+  if (parents.length !== 2) return null;
+
+  const message = git(["show", "-s", "--format=%B", ref], repoRoot);
+  const trailers = [
+    ...message.matchAll(/^Upstream-Sync-Base:\s*([0-9a-f]{40})\s*$/gim),
+  ];
+  if (trailers.length !== 1) return null;
+
+  const declaredBase = trailers[0][1].toLowerCase();
+  return declaredBase === parents[1].toLowerCase() ? parents[1] : null;
+}
+
+function resolveCiUpstreamSyncBase(repoRoot) {
+  const directBase = validatedUpstreamSyncBase(repoRoot, "HEAD");
+  if (directBase) return directBase;
+
+  const headParents = commitParents(repoRoot, "HEAD");
+  if (headParents.length !== 2) return null;
+
+  const branchOnlyCommits = git(
+    ["rev-list", "--first-parent", headParents[1], `^${headParents[0]}`],
+    repoRoot,
+  )
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+
+  for (const commit of branchOnlyCommits) {
+    const upstreamBase = validatedUpstreamSyncBase(repoRoot, commit);
+    if (upstreamBase) return upstreamBase;
+  }
+  return null;
+}
+
 function findRule(rules, relativePath) {
   return rules.find((rule) => relativePath.startsWith(`${rule.root}/`));
 }
@@ -41,7 +84,7 @@ export function resolveBaseRef(repoRoot, env = process.env) {
   }
 
   if (env.GITHUB_ACTIONS === "true") {
-    return "HEAD^1";
+    return resolveCiUpstreamSyncBase(repoRoot) ?? "HEAD^1";
   }
 
   try {

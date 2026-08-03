@@ -37,6 +37,53 @@ test("local base resolution uses the branch merge-base and fails without origin/
   );
 });
 
+test("CI uses a validated upstream sync parent only for commits introduced by the merge", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "file-size-upstream-sync-"));
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "commit", "--allow-empty", "-m", "common base");
+  git(repo, "branch", "upstream");
+  git(repo, "commit", "--allow-empty", "-m", "Sipher change");
+
+  git(repo, "switch", "upstream");
+  git(repo, "commit", "--allow-empty", "-m", "upstream change");
+  const upstreamBase = git(repo, "rev-parse", "HEAD");
+
+  git(repo, "switch", "-c", "sync", "main");
+  git(
+    repo,
+    "merge",
+    "--no-ff",
+    "upstream",
+    "-m",
+    `merge upstream\n\nUpstream-Sync-Base: ${upstreamBase}`,
+  );
+  git(repo, "commit", "--allow-empty", "-m", "CI follow-up");
+
+  git(repo, "switch", "main");
+  const mainBeforeMerge = git(repo, "rev-parse", "HEAD");
+  git(repo, "merge", "--no-ff", "sync", "-m", "synthetic PR merge");
+
+  assert.equal(
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "pull_request",
+    }),
+    upstreamBase,
+  );
+
+  git(repo, "commit", "--allow-empty", "-m", "ordinary main commit");
+  assert.equal(
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: "push",
+    }),
+    "HEAD^1",
+  );
+  assert.notEqual(mainBeforeMerge, upstreamBase);
+});
+
 test("counts empty, LF, and CRLF content with the existing semantics", () => {
   assert.equal(countLines(""), 0);
   assert.equal(countLines("one\n"), 2);
