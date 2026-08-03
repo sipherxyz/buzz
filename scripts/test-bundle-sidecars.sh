@@ -4,7 +4,14 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 bundle_script="$repo_root/scripts/bundle-sidecars.sh"
 target="aarch64-apple-darwin"
-sidecars=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
+sidecars=(
+  buzz-acp
+  buzz-agent
+  buzz-dev-mcp
+  git-credential-nostr
+  buzz
+  buzz-backend-kubernetes
+)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 

@@ -156,6 +156,7 @@ require_fixed "$workflow" "desktop/scripts/verify-macos-entitlements.sh" "entitl
 
 require_fixed "$workflow" "-p buzz-acp" "buzz-acp sidecar build"
 require_fixed "$workflow" "-p buzz-agent" "buzz-agent sidecar build"
+require_fixed "$workflow" "-p buzz-backend-kubernetes" "Kubernetes backend sidecar build"
 require_fixed "$workflow" "-p buzz-dev-mcp" "buzz-dev-mcp sidecar build"
 require_fixed "$workflow" "-p git-credential-nostr" "git-credential-nostr sidecar build"
 require_fixed "$workflow" "-p buzz-cli" "buzz CLI sidecar build"
