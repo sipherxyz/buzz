@@ -1,6 +1,9 @@
 import * as React from "react";
 
-import { useAcpRuntimesQuery } from "@/features/agents/hooks";
+import {
+  useAcpRuntimesQuery,
+  useRuntimeFileConfigQuery,
+} from "@/features/agents/hooks";
 import {
   AgentConfigFields,
   EMPTY_GLOBAL_CONFIG,
@@ -168,6 +171,8 @@ function AgentDefaultsSection({
     [config.preferred_runtime, readyRuntimes],
   );
   const selectedRuntimeId = selectedRuntime?.id ?? "";
+  const { data: runtimeFileConfig } =
+    useRuntimeFileConfigQuery(selectedRuntimeId);
   const configSurfaceLoading =
     isLoading || distributionProfile === null || runtimesQuery.isLoading;
 
@@ -224,6 +229,9 @@ function AgentDefaultsSection({
   );
   React.useEffect(() => {
     onPersistenceStateChange({
+      // configIsValid comes from AgentConfigFields' onValidityChange and
+      // covers model + provider credentials — a harness selection alone is
+      // not a working default (e.g. buzz-agent with no provider configured).
       canComplete: selectedRuntimeId.length > 0 && configIsValid && !isSaving,
       flush: flushPersistence,
     });
@@ -284,6 +292,7 @@ function AgentDefaultsSection({
             onIsCustomProviderChange={setIsCustomProvider}
             onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
+            runtimeFileConfig={runtimeFileConfig}
             selectClassName="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
             disclosure="onboarding-essential"
             unstyled

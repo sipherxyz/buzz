@@ -27,3 +27,15 @@ pub(super) async fn discover(
     let models = crate::managed_agents::discover_ai_gateway_models().await?;
     Ok(models_response(models, selected_model))
 }
+
+pub(super) async fn discover_for_provider(
+    provider: Option<&str>,
+    command: &str,
+    selected_model: Option<String>,
+) -> Result<Option<AgentModelsResponse>, String> {
+    crate::managed_agents::validate_ai_gateway_runtime(provider, command)?;
+    if !crate::managed_agents::is_ai_gateway_provider(provider) {
+        return Ok(None);
+    }
+    discover(selected_model).await.map(Some)
+}
