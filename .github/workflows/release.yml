@@ -95,7 +95,7 @@ jobs:
   release:
     name: Release
     if: github.repository == 'block/buzz'
-    runs-on: mac-self-hosted
+    runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
     permissions:
@@ -310,7 +310,7 @@ jobs:
   release-macos-x64:
     name: Release macOS (Intel)
     if: github.repository == 'block/buzz'
-    runs-on: mac-self-hosted
+    runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
     permissions:
