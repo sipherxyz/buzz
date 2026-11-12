@@ -977,7 +977,7 @@ jobs:
 
   desktop-build-macos:
     name: Desktop Build (macOS)
-    runs-on: macos-latest
+    runs-on: mac-self-hosted
     timeout-minutes: 45
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
